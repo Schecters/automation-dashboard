@@ -1173,7 +1173,7 @@ export default function RepairTaskContent({ isDarkMode }) {
               </div>
 
               {/* Timestamps & Operator */}
-              <div className={`grid grid-cols-2 sm:grid-cols-3 gap-3 p-3.5 rounded-xl border text-[11px] ${
+              <div className={`grid grid-cols-2 sm:grid-cols-4 gap-3 p-3.5 rounded-xl border text-[11px] ${
                 isDarkMode ? "bg-[#0F172A]/50 border-slate-700 text-slate-400" : "bg-gray-50 border-gray-200 text-gray-600"
               }`}>
                 <div>
@@ -1183,6 +1183,10 @@ export default function RepairTaskContent({ isDarkMode }) {
                 <div>
                   <span className="font-semibold block text-gray-500">Handled By:</span>
                   <span className="text-blue-400 font-medium">{taskDetail.accepted_by_name || `#${taskDetail.accepted_by || "-"}`}</span>
+                </div>
+                <div>
+                  <span className="font-semibold block text-gray-500">Accepted At:</span>
+                  <span className="text-blue-400 font-medium">{formatDate(taskDetail.accepted_at)}</span>
                 </div>
                 <div>
                   <span className="font-semibold block text-gray-500">Completed At:</span>

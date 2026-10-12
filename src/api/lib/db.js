@@ -15,6 +15,9 @@ export const initDatabase = async () => {
   try {
     await pool.query(`CREATE SCHEMA IF NOT EXISTS auth;`);
     await pool.query(`CREATE SCHEMA IF NOT EXISTS automation_lines;`);
+
+    // เวลาที่รับงาน (แยก query และทำก่อน ไม่ให้ไปพังตามคำสั่งอื่นด้านล่าง)
+    await pool.query(`ALTER TABLE automation_lines.tasks ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ DEFAULT NULL;`);
     
     await pool.query(`
       CREATE TABLE IF NOT EXISTS auth.audit_logs (

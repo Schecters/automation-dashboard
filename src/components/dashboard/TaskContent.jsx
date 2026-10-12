@@ -734,9 +734,23 @@ export default function TaskContent({ isDarkMode }) {
               <span className="text-gray-400 italic">Unassigned</span>
             )}
           </div>
-          <div className="flex items-center justify-between text-gray-400 text-[10px]">
-            <span>สร้าง: {formatDate(t.created_at)}</span>
-            {t.end_at && <span className="text-emerald-400 font-bold">เสร็จสิ้น</span>}
+          <div className="text-gray-400 text-[10px] space-y-0.5">
+            <div className="flex items-center justify-between">
+              <span>สร้าง:</span>
+              <span>{formatDate(t.created_at)}</span>
+            </div>
+            {t.accepted_at && (
+              <div className="flex items-center justify-between text-blue-400">
+                <span>รับงาน:</span>
+                <span>{formatDate(t.accepted_at)}</span>
+              </div>
+            )}
+            {t.end_at && (
+              <div className="flex items-center justify-between text-emerald-400 font-semibold">
+                <span>เสร็จ:</span>
+                <span>{formatDate(t.end_at)}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1328,6 +1342,11 @@ export default function TaskContent({ isDarkMode }) {
 
                               <td className="p-4 pr-6 text-[11px] opacity-80 whitespace-nowrap">
                                 <div>สร้าง: {formatDate(t.created_at)}</div>
+                                {t.accepted_at && (
+                                  <div className="text-blue-400 font-medium mt-0.5">
+                                    รับงาน: {formatDate(t.accepted_at)}
+                                  </div>
+                                )}
                                 {t.end_at && (
                                   <div className="text-emerald-400 font-medium mt-0.5">
                                     เสร็จ: {formatDate(t.end_at)}

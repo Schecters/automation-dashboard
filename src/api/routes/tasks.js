@@ -33,6 +33,7 @@ router.get('/api/tasks/my-recent', authenticateToken, async (req, res) => {
         t.created_by,
         t.accepted_by,
         t.created_at,
+        t.accepted_at,
         t.end_at
       FROM automation_lines.tasks t
       LEFT JOIN automation_lines.station s ON t.station = s.id
@@ -75,6 +76,7 @@ router.get('/api/tasks', authenticateToken, async (req, res) => {
         t.accepted_by,
         u.name AS accepted_by_name,
         t.created_at,
+        t.accepted_at,
         t.end_at
       FROM automation_lines.tasks t
       LEFT JOIN automation_lines.station s ON t.station = s.id
@@ -413,7 +415,8 @@ router.patch('/api/tasks/:task_id/status', authenticateToken, upload.array('solu
         UPDATE automation_lines.tasks 
         SET 
           status = 'pending'::automation_lines.task_status,
-          accepted_by = NULL
+          accepted_by = NULL,
+          accepted_at = NULL
         WHERE task_id = $1
         RETURNING *;
       `;
@@ -447,7 +450,8 @@ router.patch('/api/tasks/:task_id/status', authenticateToken, upload.array('solu
         UPDATE automation_lines.tasks 
         SET 
           status = 'in_progress'::automation_lines.task_status,
-          accepted_by = $1
+          accepted_by = $1,
+          accepted_at = CURRENT_TIMESTAMP
         WHERE task_id = $2
         RETURNING *;
       `;
@@ -549,6 +553,7 @@ router.put('/api/tasks/:task_id/admin-override', authenticateToken, requireAdmin
       SET 
         status = $1::automation_lines.task_status,
         accepted_by = $2,
+        accepted_at = CASE WHEN $2::int IS NULL THEN NULL ELSE COALESCE(accepted_at, CURRENT_TIMESTAMP) END,
         solution = $3,
         end_at = ${endAtValue}
       WHERE task_id = $4
