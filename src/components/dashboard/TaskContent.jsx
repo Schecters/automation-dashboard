@@ -1408,6 +1408,37 @@ export default function TaskContent({ isDarkMode }) {
             </div>
 
             <div className="space-y-5 text-xs">
+              {/* ไทม์ไลน์: สร้าง / รับงาน / เสร็จ */}
+              <div
+                className={`grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 rounded-xl border ${
+                  isDarkMode ? "bg-[#0F172A]/60 border-slate-700/70" : "bg-gray-50 border-gray-200"
+                }`}
+              >
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">สร้างเมื่อ</span>
+                  <span className={`font-semibold ${isDarkMode ? "text-slate-200" : "text-gray-800"}`}>
+                    {formatDate(taskDetail.created_at)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">รับงานเมื่อ</span>
+                  <span className="font-semibold text-blue-400">
+                    {taskDetail.accepted_at ? formatDate(taskDetail.accepted_at) : "ยังไม่มีผู้รับงาน"}
+                  </span>
+                  {taskDetail.accepted_by && (
+                    <span className="block text-[10px] text-gray-400">
+                      โดย {taskDetail.accepted_by_name || `#${taskDetail.accepted_by}`}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">เสร็จเมื่อ</span>
+                  <span className="font-semibold text-emerald-400">
+                    {taskDetail.end_at ? formatDate(taskDetail.end_at) : "ยังไม่เสร็จ"}
+                  </span>
+                </div>
+              </div>
+
               <div className="space-y-2">
                 <span className="font-bold text-rose-400 uppercase tracking-wider block text-xs">
                   Problem Details / ข้อมูลปัญหาแจ้งซ่อม
