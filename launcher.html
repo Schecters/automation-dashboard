@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <title>Automation Server Control Panel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans p-6 select-none flex flex-col h-screen justify-between">
+  
+  <div>
+    <!-- Header -->
+    <div class="flex items-center justify-between border-b border-slate-700 pb-4 mb-5">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-blue-500/30">
+          ⚙️
+        </div>
+        <div>
+          <h1 class="text-base font-bold text-white tracking-wide">Server Control Panel</h1>
+          <p class="text-xs text-slate-400">ควบคุมและสั่งรัน Backend Services & Web</p>
+        </div>
+      </div>
+      <span id="global-status" class="text-[11px] font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+        ⚪ OFFLINE
+      </span>
+    </div>
+
+    <!-- Status Cards -->
+    <div class="grid grid-cols-2 gap-3 mb-5">
+      <div class="p-3 bg-slate-800/80 rounded-2xl border border-slate-700 flex items-center justify-between">
+        <div>
+          <p class="text-[11px] text-slate-400 font-medium">API Service (Auth, Line, Excel)</p>
+          <p class="text-xs font-mono font-bold text-white">Port : 5000</p>
+        </div>
+        <span id="dot-5000" class="w-3.5 h-3.5 rounded-full bg-rose-500/80 ring-4 ring-rose-500/20"></span>
+      </div>
+
+      <div class="p-3 bg-slate-800/80 rounded-2xl border border-slate-700 flex items-center justify-between">
+        <div>
+          <p class="text-[11px] text-slate-400 font-medium">Web Dashboard (Vite)</p>
+          <p class="text-xs font-mono font-bold text-white">Port : 5173</p>
+        </div>
+        <span id="dot-5173" class="w-3.5 h-3.5 rounded-full bg-rose-500/80 ring-4 ring-rose-500/20"></span>
+      </div>
+    </div>
+
+    <!-- Console Terminal -->
+    <div class="space-y-1.5">
+      <div class="flex items-center justify-between px-1">
+        <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Console Logs</span>
+        <button id="btn-clear-log" class="text-[10px] text-slate-500 hover:text-slate-300">Clear</button>
+      </div>
+      <div id="terminal" class="bg-black/80 rounded-xl p-3 h-48 overflow-y-auto font-mono text-[11px] text-emerald-400 space-y-1 border border-slate-800 leading-relaxed custom-scrollbar shadow-inner">
+        <div class="text-slate-500">> System Ready. กดปุ่ม 'Start Servers' เพื่อเริ่มต้นระบบ...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Buttons -->
+  <div class="flex items-center gap-3 pt-4 border-t border-slate-800">
+    <button id="btn-toggle" class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2">
+      <span class="text-sm">▶</span>
+      <span id="btn-text">Start Servers</span>
+    </button>
+    
+    <button id="btn-open-web" disabled class="px-5 py-3 bg-slate-800 text-slate-500 border border-slate-700 text-xs font-bold rounded-xl transition-all flex items-center gap-2 cursor-not-allowed">
+      <span>🌐 Open Web Dashboard</span>
+      <span>↗</span>
+    </button>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    const btnToggle = document.getElementById('btn-toggle');
+    const btnText = document.getElementById('btn-text');
+    const btnOpenWeb = document.getElementById('btn-open-web');
+    const terminal = document.getElementById('terminal');
+    const globalStatus = document.getElementById('global-status');
+    const dot5000 = document.getElementById('dot-5000');
+    const dot5173 = document.getElementById('dot-5173');
+    let isRunning = false;
+
+    function appendLog(msg, colorClass = "text-slate-300") {
+      const line = document.createElement('div');
+      line.className = colorClass;
+      line.textContent = `> ${msg}`;
+      terminal.appendChild(line);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    document.getElementById('btn-clear-log').addEventListener('click', () => {
+      terminal.innerHTML = '<div class="text-slate-500">> Log cleared.</div>';
+    });
+
+    btnToggle.addEventListener('click', () => {
+      if (!isRunning) {
+        ipcRenderer.send('start-servers');
+        btnToggle.className = "flex-1 py-3 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2";
+        btnText.textContent = "Stop Servers";
+        globalStatus.className = "text-[11px] font-bold px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+        globalStatus.textContent = "🟢 RUNNING";
+        dot5000.className = "w-3.5 h-3.5 rounded-full bg-emerald-400 ring-4 ring-emerald-400/20";
+        dot5173.className = "w-3.5 h-3.5 rounded-full bg-emerald-400 ring-4 ring-emerald-400/20";
+        btnOpenWeb.disabled = false;
+        btnOpenWeb.className = "px-5 py-3 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 text-xs font-bold rounded-xl transition-all shadow-md shadow-blue-500/20 flex items-center gap-2 cursor-pointer";
+        isRunning = true;
+      } else {
+        ipcRenderer.send('stop-servers');
+        btnToggle.className = "flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2";
+        btnText.textContent = "Start Servers";
+        globalStatus.className = "text-[11px] font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700";
+        globalStatus.textContent = "⚪ OFFLINE";
+        dot5000.className = "w-3.5 h-3.5 rounded-full bg-rose-500/80 ring-4 ring-rose-500/20";
+        dot5173.className = "w-3.5 h-3.5 rounded-full bg-rose-500/80 ring-4 ring-rose-500/20";
+        btnOpenWeb.disabled = true;
+        btnOpenWeb.className = "px-5 py-3 bg-slate-800 text-slate-500 border border-slate-700 text-xs font-bold rounded-xl flex items-center gap-2 cursor-not-allowed";
+        isRunning = false;
+      }
+    });
+
+    btnOpenWeb.addEventListener('click', () => {
+      ipcRenderer.send('open-browser');
+    });
+
+    ipcRenderer.on('server-log', (event, data) => appendLog(data, 'text-emerald-400'));
+    ipcRenderer.on('server-error', (event, data) => appendLog(data, 'text-rose-400'));
+  </script>
+</body>
+</html>

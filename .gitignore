@@ -1,0 +1,39 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+
+# ข้อมูลเฉพาะเครื่อง / ไฟล์ที่ระบบสร้างเอง (ไม่ขึ้น GitHub)
+uploads/
+browser_profile/
+release/
+*.bak
+
+# รูปพนักงาน / รูป Layout ที่ระบบบันทึกตอนใช้งาน (ข้อมูลส่วนบุคคล + ไฟล์ใหญ่)
+img/
+src/Operator_system/publics/images/
+src/assets/*
+!src/assets/Unknow.jpg
+!src/assets/unknow.jpg
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
