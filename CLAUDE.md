@@ -6,6 +6,9 @@
 และ server ดึงโค้ดจาก GitHub ด้วย `git pull` ไม่ใช้วิธีก็อปไฟล์ทีละไฟล์อีกแล้ว
 (เคยลืมก็อป `src/api/middleware/auth.js` จน server เปิดไม่ขึ้น)
 
+**ก่อนเริ่มแก้ทุกครั้ง** ให้ `git pull` ก่อน เพราะอาจมีคนแก้บน server แล้ว push ขึ้นมา
+(เครื่อง dev ถ้า `git` ไม่อยู่ใน PATH ให้ใช้ `& "$env:ProgramFiles\Git\cmd\git.exe"`)
+
 ขั้นตอนหลังแก้เสร็จ:
 
 1. ตรวจ syntax ไฟล์ที่แก้ (`node --check <ไฟล์>.js` สำหรับฝั่ง API, `npx eslint <ไฟล์>.jsx` สำหรับหน้าเว็บ)
@@ -40,6 +43,27 @@ git pull
 - แก้ `launcher-main.cjs` / `launcher.html` → ปิด launcher แล้วเปิดใหม่ (ถ้าใช้ `.exe` ต้อง `npm run build:launcher` ใหม่)
 - แก้แค่หน้าเว็บ (`src/components/**`, `src/pages/**`) → Vite โหลดให้เอง ผู้ใช้กดรีเฟรชหน้าเว็บ
 - มี package ใหม่ใน `package.json` → `npm install` ก่อน restart
+
+## ✏️ ถ้าแก้โค้ดบน server โดยตรง → push กลับขึ้น GitHub
+
+ตั้งชื่อผู้ commit ครั้งแรกครั้งเดียว:
+
+```powershell
+git config --global user.name "ชื่อของคุณ"
+git config --global user.email "อีเมลของคุณ"
+```
+
+แก้เสร็จ วางทั้งก้อนนี้ใน PowerShell (จะถามว่าแก้อะไร แล้ว push ให้เลย):
+
+```powershell
+cd "C:\Website\Automation 1.0.1"
+$msg = Read-Host "แก้อะไร (ข้อความ commit)"
+git pull --rebase --autostash
+git add -A
+git status --short
+git commit -m "[server] $msg"
+git push
+```
 
 ## 📌 ข้อมูลระบบที่ควรรู้
 
