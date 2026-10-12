@@ -10,15 +10,41 @@ export const pool = new Pool({
   port: Number(process.env.DB_PORT) || 5432,
 });
 
+// 🕒 คอลัมน์เวลารับงาน (accepted_at) + เติมเวลาให้งานเก่าจาก Audit Log (ACCEPT_TASK)
+// แยกออกมามี try/catch ของตัวเอง เพื่อให้เห็น log ชัด ๆ ว่าสำเร็จหรือพัง
+const migrateTaskAcceptedAt = async () => {
+  try {
+    await pool.query(`ALTER TABLE automation_lines.tasks ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ DEFAULT NULL;`);
+
+    // งานที่มีคนรับแล้วแต่ยังไม่มี accepted_at -> ใช้เวลาครั้งล่าสุดที่กดรับงานใน audit_logs
+    const backfill = await pool.query(`
+      UPDATE automation_lines.tasks t
+      SET accepted_at = a.accepted_time
+      FROM (
+        SELECT substring(target FROM 'Task #(.+)$') AS task_id, MAX(created_at) AS accepted_time
+        FROM auth.audit_logs
+        WHERE action = 'ACCEPT_TASK'
+        GROUP BY 1
+      ) a
+      WHERE t.task_id = a.task_id
+        AND t.accepted_at IS NULL
+        AND t.accepted_by IS NOT NULL;
+    `);
+
+    console.log(`✅ tasks.accepted_at พร้อมใช้งาน (เติมเวลารับงานให้งานเก่า ${backfill.rowCount} รายการ)`);
+  } catch (err) {
+    console.error('❌ สร้าง/เติมคอลัมน์ tasks.accepted_at ไม่สำเร็จ:', err.message);
+  }
+};
+
 // ตรวจสอบและเตรียมตารางใน Database
 export const initDatabase = async () => {
   try {
     await pool.query(`CREATE SCHEMA IF NOT EXISTS auth;`);
     await pool.query(`CREATE SCHEMA IF NOT EXISTS automation_lines;`);
 
-    // เวลาที่รับงาน (แยก query และทำก่อน ไม่ให้ไปพังตามคำสั่งอื่นด้านล่าง)
-    await pool.query(`ALTER TABLE automation_lines.tasks ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ DEFAULT NULL;`);
-    
+    await migrateTaskAcceptedAt();
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS auth.audit_logs (
         id SERIAL PRIMARY KEY,
