@@ -3,7 +3,7 @@ import { DeviceCodeCredential } from '@azure/identity';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { TokenCredentialAuthenticationProvider } from '@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials/index.js';
 import { pool } from '../lib/db.js';
-import { authenticateToken, requireAdmin, requireRoles } from '../middleware/auth.js';
+import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 
 // ==========================================
 // 📊 Microsoft Graph: Excel / OneDrive / รูปโปรไฟล์
@@ -506,7 +506,7 @@ router.get(['/excel-scores', '/api/excel-scores', '/publics/excel-scores'], asyn
 // =========================================================================
 // 2. API เพิ่มข้อมูลใหม่ (POST)
 // =========================================================================
-router.post(['/excel-scores', '/api/excel-scores', '/publics/excel-scores'], authenticateToken, requireRoles('admin', 'me'), async (req, res) => {
+router.post(['/excel-scores', '/api/excel-scores', '/publics/excel-scores'], authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { configKey = 'exam_scores', employeeId, name, score } = req.body;
     const config = await getExcelConfig(configKey);
@@ -544,7 +544,7 @@ router.post(['/excel-scores', '/api/excel-scores', '/publics/excel-scores'], aut
 // =========================================================================
 // 3. API แก้ไขข้อมูล (PATCH)
 // =========================================================================
-router.patch(['/excel-scores/update/:employeeId', '/api/excel-scores/update/:employeeId', '/publics/excel-scores/update/:employeeId'], authenticateToken, requireRoles('admin', 'me'), async (req, res) => {
+router.patch(['/excel-scores/update/:employeeId', '/api/excel-scores/update/:employeeId', '/publics/excel-scores/update/:employeeId'], authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { employeeId } = req.params;
     const { configKey = 'exam_scores', newEmployeeId, newName, newScore } = req.body;
@@ -605,7 +605,7 @@ router.patch(['/excel-scores/update/:employeeId', '/api/excel-scores/update/:emp
 // =========================================================================
 // 4. API ลบข้อมูล (DELETE)
 // =========================================================================
-router.delete(['/excel-scores', '/api/excel-scores', '/publics/excel-scores'], authenticateToken, requireRoles('admin', 'me'), async (req, res) => {
+router.delete(['/excel-scores', '/api/excel-scores', '/publics/excel-scores'], authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { configKey = 'exam_scores', employeeId, name, score } = req.body;
 

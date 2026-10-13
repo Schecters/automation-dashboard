@@ -16,7 +16,6 @@
   "dependencies": {
     "@azure/identity": "^4.13.2",
     "@microsoft/microsoft-graph-client": "^3.0.7",
-    "@neondatabase/serverless": "^1.1.0",
     "@tailwindcss/vite": "^4.3.3",
     "axios": "^1.19.0",
     "bcrypt": "^6.0.0",

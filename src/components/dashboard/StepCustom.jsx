@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 
 const API_BASE_URL = "/api/plc/sequence";
 
-// บันทึก/ลบ Recipe ต้องเป็น Admin -> ต้องส่ง token ไปด้วย
+// บันทึก/ลบ Recipe ต้องเป็น Admin หรือ ME -> ต้องส่ง token ไปด้วย
 const getAuthHeaders = () => {
   const token = localStorage.getItem("token") || localStorage.getItem("sessionToken");
   return {
@@ -259,7 +259,7 @@ export default function StepCustom({ isDarkMode }) {
       });
 
       if (res.status === 401 || res.status === 403) {
-        setStatusMessage({ type: "error", text: "ไม่มีสิทธิ์บันทึก Sequence (เฉพาะ ADMIN เท่านั้น)" });
+        setStatusMessage({ type: "error", text: "ไม่มีสิทธิ์บันทึก Sequence (เฉพาะ ADMIN และ ME เท่านั้น)" });
       } else if (res.ok) {
         setInternalRecipeId(targetRecipeId);
         setSelectedRecipeId(targetRecipeId);

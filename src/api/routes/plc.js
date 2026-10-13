@@ -1,7 +1,7 @@
 import express from 'express';
 import { pool } from '../lib/db.js';
 import { io } from '../lib/realtime.js';
-import { authenticateToken, requireAdmin } from '../middleware/auth.js';
+import { authenticateToken, requireRoles } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -57,7 +57,7 @@ router.get('/api/plc/sequence/list', async (req, res) => {
 });
 
 // 3. บันทึก / อัปเดต Recipe และ Steps (รองรับทั้ง PLC Control และ Sensor Reading)
-router.post('/api/plc/sequence/save', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/api/plc/sequence/save', authenticateToken, requireRoles('admin', 'me'), async (req, res) => {
   let { RecipeId, RecipeName, Steps } = req.body;
 
   if (!RecipeName || !String(RecipeName).trim()) {
@@ -206,7 +206,7 @@ router.get('/api/plc/sequence/get', async (req, res) => {
 });
 
 // 5. ลบ Recipe พร้อม Steps ทั้งหมด (Cascade Delete)
-router.delete('/api/plc/sequence/:recipeId', authenticateToken, requireAdmin, async (req, res) => {
+router.delete('/api/plc/sequence/:recipeId', authenticateToken, requireRoles('admin', 'me'), async (req, res) => {
   const { recipeId } = req.params;
 
   if (!recipeId || !String(recipeId).trim()) {

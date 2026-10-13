@@ -1,23 +1,24 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, lazy, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import { socket } from "../socket";
 
-// 🟢 Components
-import OverallContent from "../components/dashboard/OverallContent";
-import LinesAndStation from "../components/dashboard/LinesAndStation";
-import UserManagementContent from "../components/dashboard/UserManagementContent";
-import AuditLogContent from "../components/dashboard/AuditLogContent";
-import OperatorContent from "../components/dashboard/OperatorContent";
-import LayoutViewerContent from "../components/dashboard/LayoutViewerContent";
-import LayoutEditorContent from "../components/dashboard/LayoutEditorContent";
-import TaskContent from "../components/dashboard/TaskContent";
-import RepairTaskContent from "../components/dashboard/RepairTaskContent";
-import KnowledgeContent from "../components/dashboard/KnowledgeContent";
-import ExcelSearchContent from "../components/dashboard/ExcelSearchContent";
-import PhotoOperator from "../components/dashboard/PhotoOperator";
-import AutoTriggerExcel from "../components/dashboard/AutoTriggerExcel";
-import StepCustom from "../components/dashboard/StepCustom";
-import Api from "../components/dashboard/ApiDocContent"; // 🟢 Import Api
+// 🟢 Components (lazy load: โหลดไฟล์ของแต่ละหน้าเฉพาะตอนเปิดแท็บนั้น ทำให้เปิดเว็บครั้งแรกเร็วขึ้น
+//    เช่น Konva ของหน้า Layout จะไม่ถูกโหลดถ้าไม่ได้เปิดหน้า Layout)
+const OverallContent = lazy(() => import("../components/dashboard/OverallContent"));
+const LinesAndStation = lazy(() => import("../components/dashboard/LinesAndStation"));
+const UserManagementContent = lazy(() => import("../components/dashboard/UserManagementContent"));
+const AuditLogContent = lazy(() => import("../components/dashboard/AuditLogContent"));
+const OperatorContent = lazy(() => import("../components/dashboard/OperatorContent"));
+const LayoutViewerContent = lazy(() => import("../components/dashboard/LayoutViewerContent"));
+const LayoutEditorContent = lazy(() => import("../components/dashboard/LayoutEditorContent"));
+const TaskContent = lazy(() => import("../components/dashboard/TaskContent"));
+const RepairTaskContent = lazy(() => import("../components/dashboard/RepairTaskContent"));
+const KnowledgeContent = lazy(() => import("../components/dashboard/KnowledgeContent"));
+const ExcelSearchContent = lazy(() => import("../components/dashboard/ExcelSearchContent"));
+const PhotoOperator = lazy(() => import("../components/dashboard/PhotoOperator"));
+const AutoTriggerExcel = lazy(() => import("../components/dashboard/AutoTriggerExcel"));
+const StepCustom = lazy(() => import("../components/dashboard/StepCustom"));
+const Api = lazy(() => import("../components/dashboard/ApiDocContent")); // 🟢 Api
 
 // 🟢 Common
 import NotificationBell from "../components/common/NotificationBell";
@@ -556,7 +557,13 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         <main className="flex-1 overflow-y-auto p-8">
           {accessibleTabs.some((t) => t.id === activeTab) ? (
             <div className="h-full">
-              {renderTabContent(activeTab)}
+              <Suspense
+                fallback={
+                  <div className="py-12 text-center text-sm text-gray-400 animate-pulse">กำลังโหลด...</div>
+                }
+              >
+                {renderTabContent(activeTab)}
+              </Suspense>
             </div>
           ) : (
             <div className="text-center py-12 text-gray-400 text-sm">

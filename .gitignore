@@ -22,7 +22,6 @@ release/
 
 # รูปพนักงาน / รูป Layout ที่ระบบบันทึกตอนใช้งาน (ข้อมูลส่วนบุคคล + ไฟล์ใหญ่)
 img/
-src/Operator_system/publics/images/
 src/assets/*
 !src/assets/Unknow.jpg
 !src/assets/unknow.jpg

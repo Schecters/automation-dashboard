@@ -344,7 +344,7 @@ export default function OperatorContent({ isDarkMode, userRole, role, isAdmin: i
 
       await Promise.all(updatePromises);
       if (isForbidden) {
-        alert("ไม่มีสิทธิ์แก้ไขข้อมูล (เฉพาะ ADMIN และ ME เท่านั้น)");
+        alert("ไม่มีสิทธิ์แก้ไขข้อมูล (เฉพาะ ADMIN เท่านั้น)");
         return;
       }
 
@@ -412,7 +412,7 @@ export default function OperatorContent({ isDarkMode, userRole, role, isAdmin: i
 
       await Promise.all(updatePromises);
       if (isForbidden) {
-        alert("ไม่มีสิทธิ์แก้ไขคะแนน (เฉพาะ ADMIN และ ME เท่านั้น)");
+        alert("ไม่มีสิทธิ์แก้ไขคะแนน (เฉพาะ ADMIN เท่านั้น)");
         return;
       }
 
@@ -470,7 +470,7 @@ export default function OperatorContent({ isDarkMode, userRole, role, isAdmin: i
 
       await Promise.all(deletePromises);
       if (isForbidden) {
-        alert("ไม่มีสิทธิ์ลบข้อมูล (เฉพาะ ADMIN และ ME เท่านั้น)");
+        alert("ไม่มีสิทธิ์ลบข้อมูล (เฉพาะ ADMIN เท่านั้น)");
         return;
       }
 

@@ -84,7 +84,9 @@ router.get('/api/tasks', authenticateToken, async (req, res) => {
       LEFT JOIN automation_lines.line_owners lo ON t.lines = lo.line_id AND lo.employee_id = $1::int
       WHERE 
         $2::text = 'admin'
-        OR ($2::text = 'pd' AND t.created_by = $1::int)
+        -- 🟢 PD: ดูได้ทุกงานประเภท แจ้งซ่อม (general) / PD Call ME / ปัญหาชิ้นงาน (product_issue)
+        --        ดูได้อย่างเดียว รับงานไม่ได้ (บล็อกไว้ที่ PATCH /api/tasks/:task_id/status)
+        OR ($2::text = 'pd' AND COALESCE(t.task_type, 'general') IN ('general', 'pd_call_me', 'product_issue'))
         
         -- 🟢 งานส่งต่อกะ (Shift Handover): ให้ Admin, ME, IE หรือ Line Owner ของ Line นั้นมองเห็นได้ทั้งหมด (ทุกกะ)
         OR (
