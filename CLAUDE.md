@@ -41,7 +41,9 @@ git pull
 
 - แก้ฝั่ง API (`src/api/**`) → กด Stop แล้ว Start ใน launcher หรือรัน `node .\src\api\server.js` ใหม่
 - แก้ `launcher-main.cjs` / `launcher.html` → ปิด launcher แล้วเปิดใหม่ (ถ้าใช้ `.exe` ต้อง `npm run build:launcher` ใหม่)
-- แก้แค่หน้าเว็บ (`src/components/**`, `src/pages/**`) → Vite โหลดให้เอง ผู้ใช้กดรีเฟรชหน้าเว็บ
+- แก้หน้าเว็บ (`src/components/**`, `src/pages/**` ฯลฯ) → **ต้องกด Stop แล้ว Start ใน launcher** เพื่อ build ใหม่
+  (server ใช้ `vite build` + `vite preview` ไม่ใช่ `vite dev` แล้ว จึงไม่โหลดไฟล์ใหม่เอง) แล้วผู้ใช้กดรีเฟรชหน้าเว็บ
+  ถ้าไม่ใช้ launcher: `npm run start:web`
 - มี package ใหม่ใน `package.json` → `npm install` ก่อน restart
 
 ## ✏️ ถ้าแก้โค้ดบน server โดยตรง → push กลับขึ้น GitHub
@@ -68,6 +70,9 @@ git push
 ## 📌 ข้อมูลระบบที่ควรรู้
 
 - API ทั้งหมดรวมอยู่ที่ port **5000** (`src/api/server.js`) — port 3000 (`excel.js`) เลิกใช้แล้ว
-- หน้าเว็บ Vite port **5173** proxy `/api` และ `/publics` ไปที่ 5000
+- หน้าเว็บ port **5173** (https) proxy `/api`, `/publics`, `/uploads`, `/socket.io` ไปที่ 5000
+  - บน server: launcher รัน `vite build` แล้ว `vite preview` (โหมดใช้งานจริง ไม่มี source map)
+  - บนเครื่อง dev: `npm run dev` ได้ตามปกติ (proxy ชุดเดียวกัน อยู่ใน `vite.config.js` ตัวแปร `apiProxy`)
+- อัปโหลดไฟล์รับเฉพาะรูป JPG/PNG/WEBP/GIF ไม่เกิน 20MB (`src/api/lib/uploads.js`), body JSON ไม่เกิน 20MB
 - สิทธิ์ตรวจจาก role ใน DB เสมอ (`authenticateToken` ใน `src/api/middleware/auth.js`) ไม่เชื่อ role ใน JWT
 - 1 บัญชี ใช้ได้ 1 session (`current_session_token`) login ที่ใหม่จะเตะเครื่องเก่าออก

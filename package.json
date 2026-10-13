@@ -9,6 +9,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "start:web": "vite build && vite preview",
     "start:launcher": "electron launcher-main.cjs",
     "build:launcher": "electron-builder --win portable --x64"
   },

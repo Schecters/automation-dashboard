@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
-const { fork, exec, spawn } = require('child_process');
+const { fork, exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -112,28 +112,43 @@ function startServers() {
       server5000.stdout.on('data', (d) => safeSendLog('server-log', `[5000] ${d.toString().trim()}`));
       server5000.stderr.on('data', (d) => safeSendLog('server-error', `[5000 Error] ${d.toString().trim()}`));
 
-      // 2. Port 5173 (Frontend Vite ผูก host 0.0.0.0)
+      // 2. Port 5173 (หน้าเว็บโหมดใช้งานจริง: build ก่อน แล้วค่อยเปิด preview)
+      //    - ไม่ใช้ vite dev แล้ว (ช้า และเปิดให้เห็นซอร์สโค้ดทั้งหมด)
+      //    - preview ใช้ https + proxy เดิม URL จึงยังเป็น https://<ip>:5173 เหมือนเดิม
       const viteBin = path.join(projectRoot, 'node_modules', 'vite', 'bin', 'vite.js');
 
-      if (fs.existsSync(viteBin)) {
-        viteProcess = fork(viteBin, ['--host', '0.0.0.0', '--port', '5173'], {
+      if (!fs.existsSync(viteBin)) {
+        safeSendLog('server-error', `[Vite Error] ไม่พบ Vite ที่ ${viteBin} กรุณารัน npm install ในโฟลเดอร์โปรเจกต์ก่อน`);
+        return;
+      }
+
+      const pipeViteLogs = (proc, label) => {
+        proc.stdout.on('data', (d) => safeSendLog('server-log', `[${label}] ${d.toString().trim()}`));
+        proc.stderr.on('data', (d) => safeSendLog('server-error', `[${label} Error] ${d.toString().trim()}`));
+      };
+
+      safeSendLog('server-log', '🔨 กำลัง Build หน้าเว็บ (ประมาณ 10-30 วินาที)...');
+      const buildProcess = fork(viteBin, ['build'], { cwd: projectRoot, silent: true });
+      viteProcess = buildProcess;
+      pipeViteLogs(buildProcess, 'Build');
+
+      buildProcess.on('exit', (code) => {
+        // ถูกกด Stop ระหว่าง build -> ไม่ต้องเปิด preview ต่อ
+        if (viteProcess !== buildProcess) return;
+
+        if (code !== 0) {
+          viteProcess = null;
+          safeSendLog('server-error', `[Build Error] Build หน้าเว็บไม่สำเร็จ (exit code ${code}) ดูรายละเอียดด้านบน`);
+          return;
+        }
+
+        viteProcess = fork(viteBin, ['preview', '--host', '0.0.0.0', '--port', '5173'], {
           cwd: projectRoot,
           silent: true
         });
-        viteProcess.stdout.on('data', (d) => safeSendLog('server-log', `[Vite] ${d.toString().trim()}`));
-        viteProcess.stderr.on('data', (d) => safeSendLog('server-error', `[Vite Error] ${d.toString().trim()}`));
-      } else {
-        const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-        viteProcess = spawn(npmCmd, ['run', 'dev', '--', '--host', '0.0.0.0', '--port', '5173'], {
-          cwd: projectRoot,
-          shell: true,
-          stdio: 'pipe'
-        });
-        viteProcess.stdout.on('data', (d) => safeSendLog('server-log', `[Vite] ${d.toString().trim()}`));
-        viteProcess.stderr.on('data', (d) => safeSendLog('server-error', `[Vite Error] ${d.toString().trim()}`));
-      }
-
-      safeSendLog('server-log', `🚀 ระบบพร้อมทำงาน (Local IP: http://${localIp}:5173)`);
+        pipeViteLogs(viteProcess, 'Web');
+        safeSendLog('server-log', `🚀 ระบบพร้อมทำงาน (Local IP: https://${localIp}:5173)`);
+      });
     } catch (err) {
       safeSendLog('server-error', `[Exception] ${err.message}`);
     }
@@ -144,7 +159,7 @@ ipcMain.on('start-servers', () => startServers());
 ipcMain.on('stop-servers', () => stopServers());
 ipcMain.on('open-browser', () => {
   const localIp = getLocalIP();
-  shell.openExternal(`http://${localIp}:5173`);
+  shell.openExternal(`https://${localIp}:5173`);
 });
 
 app.whenReady().then(createWindow);
