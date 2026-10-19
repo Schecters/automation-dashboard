@@ -62,7 +62,8 @@ const migratePmChecklist = async () => {
         template_id INT NOT NULL REFERENCES automation_lines.pm_templates(id) ON DELETE CASCADE,
         seq INT NOT NULL DEFAULT 0,
         label TEXT NOT NULL,
-        check_type VARCHAR(20) NOT NULL DEFAULT 'pass_fail' CHECK (check_type IN ('pass_fail', 'number')),
+        check_type VARCHAR(20) NOT NULL DEFAULT 'pass_fail',
+        description TEXT,
         unit VARCHAR(30),
         min_value NUMERIC,
         max_value NUMERIC,
@@ -88,10 +89,6 @@ const migratePmChecklist = async () => {
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
 
-      -- 1 แม่แบบ / 1 วัน / 1 กะ บันทึกได้ครั้งเดียว (ยกเว้นใบที่ถูก Reject สามารถทำใหม่ได้)
-      CREATE UNIQUE INDEX IF NOT EXISTS uq_pm_record_daily
-        ON automation_lines.pm_records (template_id, check_date, shift)
-        WHERE status <> 'rejected';
 
       CREATE TABLE IF NOT EXISTS automation_lines.pm_record_values (
         id SERIAL PRIMARY KEY,
@@ -100,6 +97,7 @@ const migratePmChecklist = async () => {
         seq INT NOT NULL DEFAULT 0,
         label TEXT NOT NULL,
         check_type VARCHAR(20) NOT NULL,
+        description TEXT,
         unit VARCHAR(30),
         min_value NUMERIC,
         max_value NUMERIC,
@@ -123,6 +121,29 @@ const migratePmChecklist = async () => {
 
       CREATE INDEX IF NOT EXISTS idx_pm_records_date ON automation_lines.pm_records (check_date DESC);
     `);
+
+    // อัปเกรดจากเวอร์ชันแรก: เพิ่มคำอธิบายรายการ + แถวหัวข้อย่อย (check_type = 'section')
+    await pool.query(`
+      ALTER TABLE automation_lines.pm_template_items ADD COLUMN IF NOT EXISTS description TEXT;
+      ALTER TABLE automation_lines.pm_record_values ADD COLUMN IF NOT EXISTS description TEXT;
+      ALTER TABLE automation_lines.pm_template_items DROP CONSTRAINT IF EXISTS pm_template_items_check_type_check;
+      ALTER TABLE automation_lines.pm_template_items ADD CONSTRAINT pm_template_items_check_type_check
+        CHECK (check_type IN ('pass_fail', 'number', 'section'));
+    `);
+
+    // 1 แม่แบบ / 1 วัน บันทึกได้ครั้งเดียว (ไม่แยกกะ) ยกเว้นใบที่ถูก Reject ทำใหม่ได้
+    // (แยก query: ถ้ามีข้อมูลซ้ำเดิมจนสร้าง index ไม่ได้ API ยังเช็คซ้ำให้อยู่)
+    await pool.query(`DROP INDEX IF EXISTS automation_lines.uq_pm_record_daily;`);
+    try {
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_pm_record_per_day
+          ON automation_lines.pm_records (template_id, check_date)
+          WHERE status <> 'rejected';
+      `);
+    } catch (idxErr) {
+      console.warn('⚠️ สร้าง unique index รายวันของ PM ไม่ได้ (อาจมีใบซ้ำวันเดียวกันอยู่แล้ว):', idxErr.message);
+    }
+
     console.log('✅ ตาราง Daily PM Checklist พร้อมใช้งาน');
   } catch (err) {
     console.error('❌ สร้างตาราง Daily PM Checklist ไม่สำเร็จ:', err.message);

@@ -13,10 +13,11 @@ const getHeaders = () => {
   };
 };
 
-const newItem = () => ({
+const newItem = (checkType = "pass_fail") => ({
   key: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
   label: "",
-  check_type: "pass_fail",
+  description: "",
+  check_type: checkType,
   unit: "",
   min_value: "",
   max_value: "",
@@ -148,6 +149,7 @@ export default function PmChecklistBuilder({ isDarkMode }) {
       items: (t.items || []).map((it) => ({
         key: `item_${it.id}`,
         label: it.label,
+        description: it.description || "",
         check_type: it.check_type,
         unit: it.unit || "",
         min_value: it.min_value ?? "",
@@ -180,6 +182,7 @@ export default function PmChecklistBuilder({ isDarkMode }) {
         approval_steps: form.approval_steps,
         items: form.items.map((it) => ({
           label: it.label,
+          description: it.description,
           check_type: it.check_type,
           unit: it.unit,
           min_value: it.min_value,
@@ -307,7 +310,8 @@ export default function PmChecklistBuilder({ isDarkMode }) {
                 >
                   <div className={`font-bold truncate ${isDarkMode ? "text-slate-100" : "text-gray-800"}`}>{t.name}</div>
                   <div className="text-[10px] text-gray-400 mt-0.5">
-                    <span className="text-blue-400 font-semibold">{t.line_id}</span> · {t.process} · {t.items?.length || 0} รายการ
+                    <span className="text-blue-400 font-semibold">{t.line_id}</span> · {t.process} ·{" "}
+                    {(t.items || []).filter((it) => it.check_type !== "section").length} รายการ
                   </div>
                   <div className="text-[10px] text-gray-400 mt-0.5 truncate">
                     อนุมัติ: {t.approval_steps?.length ? t.approval_steps.map(positionLabel).join(" → ") : "ไม่ต้องอนุมัติ"}
@@ -446,24 +450,73 @@ export default function PmChecklistBuilder({ isDarkMode }) {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className={`text-xs font-bold ${isDarkMode ? "text-slate-200" : "text-gray-700"}`}>
-                รายการที่ต้องเช็ค ({form.items.length})
+                รายการที่ต้องเช็ค ({form.items.filter((it) => it.check_type !== "section").length})
               </span>
-              <button
-                type="button"
-                onClick={() => updateForm({ items: [...form.items, newItem()] })}
-                className="px-3 py-1.5 rounded-xl text-xs font-bold border border-blue-500/40 text-blue-500 hover:bg-blue-500/10"
-              >
-                + เพิ่มรายการ
-              </button>
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => updateForm({ items: [...form.items, newItem("section")] })}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border border-amber-500/40 text-amber-500 hover:bg-amber-500/10"
+                >
+                  + เพิ่มหัวข้อย่อย
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateForm({ items: [...form.items, newItem()] })}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border border-blue-500/40 text-blue-500 hover:bg-blue-500/10"
+                >
+                  + เพิ่มรายการ
+                </button>
+              </div>
             </div>
+            <p className="text-[10px] text-gray-400">
+              หัวข้อย่อย = ใช้จัดกลุ่มและอธิบายรายการที่อยู่ด้านล่าง (เช่น "ระบบลม", "ระบบไฟฟ้า") ไม่ต้องเช็ค
+            </p>
 
-            {form.items.map((it, i) => (
+            {form.items.map((it, i) =>
+              it.check_type === "section" ? (
+                <div
+                  key={it.key}
+                  className={`p-3 rounded-xl border-l-4 border-amber-500 border space-y-2 ${
+                    isDarkMode ? "border-y-slate-700 border-r-slate-700 bg-amber-500/5" : "border-y-gray-200 border-r-gray-200 bg-amber-50"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black text-amber-500 shrink-0 w-14">หัวข้อย่อย</span>
+                    <input
+                      required
+                      value={it.label}
+                      onChange={(e) => updateItem(i, { label: e.target.value })}
+                      placeholder="ชื่อหัวข้อ เช่น ระบบลม (Pneumatic)"
+                      className={`${input} font-bold`}
+                    />
+                    <button type="button" className={iconBtn} disabled={i === 0} onClick={() => updateForm({ items: moveInArray(form.items, i, -1) })}>↑</button>
+                    <button type="button" className={iconBtn} disabled={i === form.items.length - 1} onClick={() => updateForm({ items: moveInArray(form.items, i, 1) })}>↓</button>
+                    <button
+                      type="button"
+                      className={`${iconBtn} hover:!text-rose-500`}
+                      onClick={() => updateForm({ items: form.items.filter((_, idx) => idx !== i) })}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={it.description}
+                    onChange={(e) => updateItem(i, { description: e.target.value })}
+                    placeholder="คำอธิบายหัวข้อนี้ (ไม่บังคับ) เช่น เช็คก่อนเปิดเครื่อง, ต้องปิดลมก่อนเช็ค"
+                    className={`${input} ml-0 sm:ml-16 sm:w-[calc(100%-4rem)]`}
+                  />
+                </div>
+              ) : (
               <div
                 key={it.key}
                 className={`p-3 rounded-xl border space-y-2 ${isDarkMode ? "border-slate-700 bg-slate-900/40" : "border-gray-200 bg-gray-50"}`}
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-gray-400 w-6 shrink-0">{i + 1}.</span>
+                  <span className="text-[11px] font-bold text-gray-400 w-6 shrink-0">
+                    {form.items.slice(0, i + 1).filter((x) => x.check_type !== "section").length}.
+                  </span>
                   <input
                     required
                     value={it.label}
@@ -476,11 +529,20 @@ export default function PmChecklistBuilder({ isDarkMode }) {
                   <button
                     type="button"
                     className={`${iconBtn} hover:!text-rose-500`}
-                    disabled={form.items.length === 1}
+                    disabled={form.items.filter((x) => x.check_type !== "section").length === 1}
                     onClick={() => updateForm({ items: form.items.filter((_, idx) => idx !== i) })}
                   >
                     ✕
                   </button>
+                </div>
+
+                <div className="pl-8">
+                  <input
+                    value={it.description}
+                    onChange={(e) => updateItem(i, { description: e.target.value })}
+                    placeholder="คำอธิบาย / วิธีเช็ค (ไม่บังคับ) เช่น ดูเกจหน้าเครื่อง ต้องอยู่ในโซนสีเขียว"
+                    className={input}
+                  />
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 pl-8">
@@ -535,7 +597,8 @@ export default function PmChecklistBuilder({ isDarkMode }) {
                   </p>
                 )}
               </div>
-            ))}
+              )
+            )}
           </div>
 
           <div className={`flex flex-wrap items-center justify-between gap-2 pt-4 border-t ${isDarkMode ? "border-slate-700" : "border-gray-100"}`}>

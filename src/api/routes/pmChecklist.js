@@ -117,7 +117,19 @@ const parseTemplateBody = (body) => {
   for (let i = 0; i < rawItems.length; i++) {
     const it = rawItems[i] || {};
     const label = String(it.label || '').trim();
-    const checkType = it.check_type === 'number' ? 'number' : 'pass_fail';
+    const description = String(it.description || '').trim() || null;
+    const checkType = ['number', 'section'].includes(it.check_type) ? it.check_type : 'pass_fail';
+
+    // หัวข้อย่อย: ไว้จัดกลุ่ม/อธิบายรายการด้านล่าง ไม่ต้องเช็ค
+    if (checkType === 'section') {
+      if (!label) return { error: `แถวที่ ${i + 1}: กรุณาระบุชื่อหัวข้อย่อย` };
+      items.push({
+        seq: i + 1, label, description, check_type: 'section',
+        unit: null, min_value: null, max_value: null, is_required: false,
+      });
+      continue;
+    }
+
     if (!label) return { error: `รายการที่ ${i + 1}: กรุณาระบุสิ่งที่ต้องเช็ค` };
 
     let unit = null;
@@ -138,12 +150,17 @@ const parseTemplateBody = (body) => {
     items.push({
       seq: i + 1,
       label,
+      description,
       check_type: checkType,
       unit,
       min_value: minValue,
       max_value: maxValue,
       is_required: it.is_required !== false,
     });
+  }
+
+  if (!items.some((it) => it.check_type !== 'section')) {
+    return { error: 'กรุณาเพิ่มรายการที่ต้องเช็คอย่างน้อย 1 รายการ (นอกจากหัวข้อย่อย)' };
   }
 
   return { data: { name, lineId, process, description, approvalSteps, items } };
@@ -155,7 +172,7 @@ const TEMPLATE_SELECT = `
     t.created_by, t.created_at, t.updated_at,
     COALESCE((
       SELECT JSON_AGG(JSON_BUILD_OBJECT(
-        'id', i.id, 'seq', i.seq, 'label', i.label, 'check_type', i.check_type, 'unit', i.unit,
+        'id', i.id, 'seq', i.seq, 'label', i.label, 'description', i.description, 'check_type', i.check_type, 'unit', i.unit,
         'min_value', i.min_value::float8, 'max_value', i.max_value::float8, 'is_required', i.is_required
       ) ORDER BY i.seq, i.id)
       FROM automation_lines.pm_template_items i
@@ -168,9 +185,9 @@ const insertTemplateItems = async (client, templateId, items) => {
   for (const it of items) {
     await client.query(
       `INSERT INTO automation_lines.pm_template_items
-         (template_id, seq, label, check_type, unit, min_value, max_value, is_required)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [templateId, it.seq, it.label, it.check_type, it.unit, it.min_value, it.max_value, it.is_required]
+         (template_id, seq, label, description, check_type, unit, min_value, max_value, is_required)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [templateId, it.seq, it.label, it.description, it.check_type, it.unit, it.min_value, it.max_value, it.is_required]
     );
   }
 };
@@ -313,10 +330,10 @@ router.delete('/api/pm/templates/:id', authenticateToken, requireRoles(...TEMPLA
 const RECORD_SELECT = `
   SELECT
     r.id, r.template_id, r.template_name, r.line_id, r.process,
-    TO_CHAR(r.check_date, 'YYYY-MM-DD') AS check_date, r.shift,
+    TO_CHAR(r.check_date, 'YYYY-MM-DD') AS check_date,
     r.approval_steps, r.current_step, r.status, r.overall_result, r.note,
     r.checked_by, r.checked_by_name, r.created_at, r.updated_at,
-    (SELECT COUNT(*) FROM automation_lines.pm_record_values v WHERE v.record_id = r.id)::int AS item_count,
+    (SELECT COUNT(*) FROM automation_lines.pm_record_values v WHERE v.record_id = r.id AND v.check_type <> 'section')::int AS item_count,
     (SELECT COUNT(*) FROM automation_lines.pm_record_values v WHERE v.record_id = r.id AND v.result = 'NG')::int AS ng_count
   FROM automation_lines.pm_records r
 `;
@@ -364,7 +381,7 @@ router.get('/api/pm/records/:id', authenticateToken, async (req, res) => {
     }
     const [values, approvals, linePositions] = await Promise.all([
       pool.query(
-        `SELECT id, item_id, seq, label, check_type, unit, min_value::float8 AS min_value, max_value::float8 AS max_value,
+        `SELECT id, item_id, seq, label, description, check_type, unit, min_value::float8 AS min_value, max_value::float8 AS max_value,
                 value_bool, value_number::float8 AS value_number, result, remark
          FROM automation_lines.pm_record_values WHERE record_id = $1 ORDER BY seq, id`,
         [recordId]
@@ -399,7 +416,6 @@ router.post('/api/pm/records', authenticateToken, async (req, res) => {
 
   const templateId = Number(req.body?.template_id);
   const checkDate = String(req.body?.check_date || '');
-  const shift = String(req.body?.shift || '').toLowerCase() === 'b' ? 'b' : 'a';
   const note = String(req.body?.note || '').trim() || null;
   const inputValues = Array.isArray(req.body?.values) ? req.body.values : [];
 
@@ -414,10 +430,28 @@ router.post('/api/pm/records', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'ไม่พบแม่แบบเช็คลิสต์นี้ (อาจถูกลบไปแล้ว)' });
     }
     const template = templateResult.rows[0];
+
+    // 1 แม่แบบ / 1 วัน ได้ใบเดียว (ใบที่ถูก Reject ทำใหม่ได้)
+    const duplicate = await client.query(
+      `SELECT 1 FROM automation_lines.pm_records
+       WHERE template_id = $1 AND check_date = $2::date AND status <> 'rejected' LIMIT 1`,
+      [templateId, checkDate]
+    );
+    if (duplicate.rowCount > 0) {
+      return res.status(409).json({
+        success: false,
+        message: `เช็คลิสต์นี้ของวันที่ ${checkDate} ถูกบันทึกไปแล้ว (ถ้าถูก Reject จึงจะบันทึกใหม่ได้)`,
+      });
+    }
+
     const valueByItem = new Map(inputValues.map((v) => [Number(v?.item_id), v]));
 
     const rows = [];
     for (const item of template.items) {
+      if (item.check_type === 'section') {
+        rows.push({ item, valueBool: null, valueNumber: null, result: null, remark: null });
+        continue;
+      }
       const input = valueByItem.get(Number(item.id)) || {};
       let valueBool = null;
       let valueNumber = null;
@@ -452,11 +486,11 @@ router.post('/api/pm/records', authenticateToken, async (req, res) => {
     await client.query('BEGIN');
     const inserted = await client.query(
       `INSERT INTO automation_lines.pm_records
-         (template_id, template_name, line_id, process, check_date, shift, approval_steps, status, overall_result, note, checked_by, checked_by_name)
-       VALUES ($1, $2, $3, $4, $5::date, $6, $7::jsonb, $8, $9, $10, $11, $12)
+         (template_id, template_name, line_id, process, check_date, approval_steps, status, overall_result, note, checked_by, checked_by_name)
+       VALUES ($1, $2, $3, $4, $5::date, $6::jsonb, $7, $8, $9, $10, $11)
        RETURNING id`,
       [
-        template.id, template.name, template.line_id, template.process, checkDate, shift,
+        template.id, template.name, template.line_id, template.process, checkDate,
         JSON.stringify(approvalSteps), status, overallResult, note,
         Number(req.user.employee_id), req.user.name || null,
       ]
@@ -466,10 +500,10 @@ router.post('/api/pm/records', authenticateToken, async (req, res) => {
     for (const r of rows) {
       await client.query(
         `INSERT INTO automation_lines.pm_record_values
-           (record_id, item_id, seq, label, check_type, unit, min_value, max_value, value_bool, value_number, result, remark)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+           (record_id, item_id, seq, label, description, check_type, unit, min_value, max_value, value_bool, value_number, result, remark)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
-          recordId, r.item.id, r.item.seq, r.item.label, r.item.check_type, r.item.unit,
+          recordId, r.item.id, r.item.seq, r.item.label, r.item.description, r.item.check_type, r.item.unit,
           r.item.min_value, r.item.max_value, r.valueBool, r.valueNumber, r.result, r.remark,
         ]
       );
@@ -477,7 +511,7 @@ router.post('/api/pm/records', authenticateToken, async (req, res) => {
     await client.query('COMMIT');
 
     await auditPm(req, 'PM_RECORD_SUBMIT', `PM Record #${recordId}`,
-      `Submitted "${template.name}" (Line ${template.line_id} / ${template.process}) ${checkDate} shift ${shift.toUpperCase()} result ${overallResult}`);
+      `Submitted "${template.name}" (Line ${template.line_id} / ${template.process}) ${checkDate} result ${overallResult}`);
     io.emit('pm_updated', { type: 'record', id: recordId });
 
     res.json({
@@ -490,7 +524,7 @@ router.post('/api/pm/records', authenticateToken, async (req, res) => {
     if (err.code === '23505') {
       return res.status(409).json({
         success: false,
-        message: `เช็คลิสต์นี้ของวันที่ ${checkDate} กะ ${shift.toUpperCase()} ถูกบันทึกไปแล้ว (ถ้าถูก Reject จึงจะบันทึกใหม่ได้)`,
+        message: `เช็คลิสต์นี้ของวันที่ ${checkDate} ถูกบันทึกไปแล้ว (ถ้าถูก Reject จึงจะบันทึกใหม่ได้)`,
       });
     }
     console.error('Submit PM Record Error:', err);
@@ -583,7 +617,7 @@ router.delete('/api/pm/records/:id', authenticateToken, requireAdmin, async (req
   try {
     const result = await pool.query(
       `DELETE FROM automation_lines.pm_records WHERE id = $1
-       RETURNING template_name, TO_CHAR(check_date, 'YYYY-MM-DD') AS check_date, shift`,
+       RETURNING template_name, TO_CHAR(check_date, 'YYYY-MM-DD') AS check_date`,
       [recordId]
     );
     if (result.rowCount === 0) {
@@ -591,7 +625,7 @@ router.delete('/api/pm/records/:id', authenticateToken, requireAdmin, async (req
     }
     const r = result.rows[0];
     await auditPm(req, 'PM_RECORD_DELETE', `PM Record #${recordId}`,
-      `Deleted "${r.template_name}" ${r.check_date} shift ${String(r.shift).toUpperCase()}`);
+      `Deleted "${r.template_name}" ${r.check_date}`);
     io.emit('pm_updated', { type: 'record', id: recordId });
     res.json({ success: true, message: 'ลบใบเช็คลิสต์เรียบร้อย' });
   } catch (err) {

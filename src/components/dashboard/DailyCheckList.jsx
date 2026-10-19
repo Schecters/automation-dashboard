@@ -59,14 +59,10 @@ const judge = (item, value) => {
   return "OK";
 };
 
-const getDefaultShift = () => {
-  try {
-    const saved = JSON.parse(localStorage.getItem("user") || "{}");
-    return String(saved.shift || "").toLowerCase() === "b" ? "b" : "a";
-  } catch {
-    return "a";
-  }
-};
+const isSection = (item) => item?.check_type === "section";
+const countCheckItems = (items) => (items || []).filter((it) => !isSection(it)).length;
+// ลำดับข้อ (นับเฉพาะรายการเช็ค ไม่นับหัวข้อย่อย)
+const itemNumber = (items, index) => items.slice(0, index + 1).filter((it) => !isSection(it)).length;
 
 export default function DailyCheckList({ isDarkMode }) {
   const userRole = (localStorage.getItem("userRole") || "").toLowerCase().trim();
@@ -81,7 +77,6 @@ export default function DailyCheckList({ isDarkMode }) {
 
   // ----- แท็บกรอกเช็คลิสต์ -----
   const [fillDate, setFillDate] = useState(todayBangkok);
-  const [fillShift, setFillShift] = useState(getDefaultShift);
   const [fillLine, setFillLine] = useState("");
   const [dayRecords, setDayRecords] = useState([]);
   const [activeTemplate, setActiveTemplate] = useState(null);
@@ -217,9 +212,9 @@ export default function DailyCheckList({ isDarkMode }) {
     [templates, fillLine]
   );
 
-  // สถานะของแต่ละแม่แบบ ในวัน/กะ ที่เลือก (ใบล่าสุดที่ไม่ถูก Reject)
+  // สถานะของแต่ละแม่แบบ ในวันที่เลือก (ใบล่าสุดที่ไม่ถูก Reject)
   const recordForTemplate = (templateId) => {
-    const list = dayRecords.filter((r) => r.template_id === templateId && r.shift === fillShift);
+    const list = dayRecords.filter((r) => r.template_id === templateId);
     return list.find((r) => r.status !== "rejected") || list[0] || null;
   };
 
@@ -238,18 +233,19 @@ export default function DailyCheckList({ isDarkMode }) {
     let done = 0;
     let ng = 0;
     for (const item of activeTemplate.items) {
+      if (isSection(item)) continue;
       const r = judge(item, values[item.id]);
       if (r) done++;
       if (r === "NG") ng++;
     }
-    return { done, total: activeTemplate.items.length, ng };
+    return { done, total: countCheckItems(activeTemplate.items), ng };
   }, [activeTemplate, values]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!activeTemplate) return;
 
-    const missing = activeTemplate.items.filter((it) => it.is_required && !judge(it, values[it.id]));
+    const missing = activeTemplate.items.filter((it) => !isSection(it) && it.is_required && !judge(it, values[it.id]));
     if (missing.length > 0) {
       setMessage({ type: "error", text: `ยังไม่ได้เช็ค: ${missing.map((m) => m.label).join(", ")}` });
       return;
@@ -262,9 +258,8 @@ export default function DailyCheckList({ isDarkMode }) {
       const payload = {
         template_id: activeTemplate.id,
         check_date: fillDate,
-        shift: fillShift,
         note,
-        values: activeTemplate.items.map((it) => ({
+        values: activeTemplate.items.filter((it) => !isSection(it)).map((it) => ({
           item_id: it.id,
           value_bool: values[it.id]?.value_bool ?? null,
           value_number: values[it.id]?.value_number ?? null,
@@ -356,6 +351,19 @@ export default function DailyCheckList({ isDarkMode }) {
     );
   };
 
+  // หัวข้อย่อย: แถบหัวเรื่องจัดกลุ่ม + คำอธิบาย (ไม่ต้องเช็ค)
+  const renderSection = (item) => (
+    <div
+      key={`section_${item.id}`}
+      className={`pt-3 pb-2 px-3 rounded-xl border-l-4 border-amber-500 ${isDarkMode ? "bg-amber-500/5" : "bg-amber-50"}`}
+    >
+      <div className={`text-sm font-bold ${textMain}`}>{item.label}</div>
+      {item.description && (
+        <p className={`text-[11px] mt-0.5 whitespace-pre-wrap ${isDarkMode ? "text-slate-400" : "text-gray-600"}`}>{item.description}</p>
+      )}
+    </div>
+  );
+
   const resultBadge = (result) =>
     result === "NG" ? (
       <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-rose-600 text-white">NG</span>
@@ -420,13 +428,6 @@ export default function DailyCheckList({ isDarkMode }) {
               <input type="date" value={fillDate} max={todayBangkok()} onChange={(e) => setFillDate(e.target.value)} className={input} />
             </div>
             <div>
-              <label className="text-[11px] font-bold text-gray-400 block mb-1">กะ</label>
-              <select value={fillShift} onChange={(e) => setFillShift(e.target.value)} className={input}>
-                <option value="a">กะ A</option>
-                <option value="b">กะ B</option>
-              </select>
-            </div>
-            <div>
               <label className="text-[11px] font-bold text-gray-400 block mb-1">Line</label>
               <select value={fillLine} onChange={(e) => setFillLine(e.target.value)} className={input}>
                 <option value="">ทุก Line</option>
@@ -452,7 +453,7 @@ export default function DailyCheckList({ isDarkMode }) {
                       <div className="min-w-0">
                         <div className={`text-sm font-bold truncate ${textMain}`}>{t.name}</div>
                         <div className="text-[11px] text-gray-400 mt-0.5">
-                          <span className="text-blue-400 font-semibold">{t.line_id}</span> · {t.process} · {t.items.length} รายการ
+                          <span className="text-blue-400 font-semibold">{t.line_id}</span> · {t.process} · {countCheckItems(t.items)} รายการ
                         </div>
                       </div>
                       {rec ? statusBadge(rec) : <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-gray-500/10 text-gray-400 border border-gray-500/20 shrink-0">ยังไม่เช็ค</span>}
@@ -497,7 +498,7 @@ export default function DailyCheckList({ isDarkMode }) {
               <div className={`text-base font-bold ${textMain}`}>{activeTemplate.name}</div>
               <div className="text-[11px] text-gray-400 mt-0.5">
                 Line <span className="text-blue-400 font-semibold">{activeTemplate.line_id}</span> · Process {activeTemplate.process} ·
-                วันที่ {formatDate(fillDate)} · กะ {fillShift.toUpperCase()}
+                วันที่ {formatDate(fillDate)}
               </div>
               {activeTemplate.description && (
                 <p className={`text-xs mt-2 whitespace-pre-wrap ${isDarkMode ? "text-slate-300" : "text-gray-600"}`}>{activeTemplate.description}</p>
@@ -511,6 +512,7 @@ export default function DailyCheckList({ isDarkMode }) {
 
           <div className="space-y-2">
             {activeTemplate.items.map((item, i) => {
+              if (isSection(item)) return renderSection(item);
               const v = values[item.id] || {};
               const result = judge(item, v);
               return (
@@ -529,8 +531,13 @@ export default function DailyCheckList({ isDarkMode }) {
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="flex-1 min-w-[200px]">
                       <div className={`text-xs font-semibold ${textMain}`}>
-                        {i + 1}. {item.label} {item.is_required && <span className="text-rose-500">*</span>}
+                        {itemNumber(activeTemplate.items, i)}. {item.label} {item.is_required && <span className="text-rose-500">*</span>}
                       </div>
+                      {item.description && (
+                        <div className={`text-[11px] mt-0.5 whitespace-pre-wrap ${isDarkMode ? "text-slate-400" : "text-gray-500"}`}>
+                          {item.description}
+                        </div>
+                      )}
                       {item.check_type === "number" && (
                         <div className="text-[10px] text-gray-400">เกณฑ์: {rangeText(item.min_value, item.max_value, item.unit)}</div>
                       )}
@@ -676,7 +683,7 @@ export default function DailyCheckList({ isDarkMode }) {
                     visibleRecords.map((r) => (
                       <tr key={r.id} className={isDarkMode ? "hover:bg-slate-700/30" : "hover:bg-gray-50"}>
                         <td className={`p-3 pl-4 ${textMain}`}>
-                          {formatDate(r.check_date)} <span className="text-gray-400">· กะ {String(r.shift).toUpperCase()}</span>
+                          {formatDate(r.check_date)}
                         </td>
                         <td className="p-3">
                           <span className="text-blue-400 font-semibold">{r.line_id}</span> <span className="text-gray-400">/ {r.process}</span>
@@ -724,8 +731,8 @@ export default function DailyCheckList({ isDarkMode }) {
               <div>
                 <div className={`text-base font-bold ${textMain}`}>{detail.template_name}</div>
                 <div className="text-[11px] text-gray-400 mt-0.5">
-                  Line <span className="text-blue-400 font-semibold">{detail.line_id}</span> · {detail.process} · {formatDate(detail.check_date)} · กะ{" "}
-                  {String(detail.shift).toUpperCase()} · เช็คโดย {detail.checked_by_name || `#${detail.checked_by}`} ({formatDateTime(detail.created_at)})
+                  Line <span className="text-blue-400 font-semibold">{detail.line_id}</span> · {detail.process} · {formatDate(detail.check_date)} ·
+                  เช็คโดย {detail.checked_by_name || `#${detail.checked_by}`} ({formatDateTime(detail.created_at)})
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -737,7 +744,7 @@ export default function DailyCheckList({ isDarkMode }) {
 
             {/* ผลการเช็ค */}
             <div className="space-y-1.5">
-              {detail.values.map((v, i) => (
+              {detail.values.map((v, i) => isSection(v) ? renderSection(v) : (
                 <div
                   key={v.id}
                   className={`flex flex-wrap items-center gap-3 p-2.5 rounded-xl border text-xs ${
@@ -745,7 +752,8 @@ export default function DailyCheckList({ isDarkMode }) {
                   }`}
                 >
                   <div className="flex-1 min-w-[200px]">
-                    <div className={`font-semibold ${textMain}`}>{i + 1}. {v.label}</div>
+                    <div className={`font-semibold ${textMain}`}>{itemNumber(detail.values, i)}. {v.label}</div>
+                    {v.description && <div className="text-[10px] text-gray-400 whitespace-pre-wrap">{v.description}</div>}
                     {v.check_type === "number" && (
                       <div className="text-[10px] text-gray-400">เกณฑ์: {rangeText(v.min_value, v.max_value, v.unit)}</div>
                     )}
