@@ -37,6 +37,98 @@ const migrateTaskAcceptedAt = async () => {
   }
 };
 
+// 📋 ตาราง Daily PM Checklist
+//  - pm_templates / pm_template_items : แม่แบบเช็คลิสต์ (Line, Process, รายการที่ต้องเช็ค, ลำดับผู้อนุมัติ)
+//  - pm_records / pm_record_values    : ผลการเช็คประจำวัน (เก็บสำเนาหัวข้อ/เกณฑ์ไว้ แก้แม่แบบทีหลังประวัติไม่เพี้ยน)
+//  - pm_approvals                     : ประวัติการอนุมัติ/ไม่อนุมัติ ทีละขั้น
+const migratePmChecklist = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS automation_lines.pm_templates (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(200) NOT NULL,
+        line_id TEXT NOT NULL,
+        process VARCHAR(200) NOT NULL,
+        description TEXT,
+        approval_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by INT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS automation_lines.pm_template_items (
+        id SERIAL PRIMARY KEY,
+        template_id INT NOT NULL REFERENCES automation_lines.pm_templates(id) ON DELETE CASCADE,
+        seq INT NOT NULL DEFAULT 0,
+        label TEXT NOT NULL,
+        check_type VARCHAR(20) NOT NULL DEFAULT 'pass_fail' CHECK (check_type IN ('pass_fail', 'number')),
+        unit VARCHAR(30),
+        min_value NUMERIC,
+        max_value NUMERIC,
+        is_required BOOLEAN NOT NULL DEFAULT TRUE
+      );
+
+      CREATE TABLE IF NOT EXISTS automation_lines.pm_records (
+        id SERIAL PRIMARY KEY,
+        template_id INT NOT NULL REFERENCES automation_lines.pm_templates(id),
+        template_name VARCHAR(200) NOT NULL,
+        line_id TEXT NOT NULL,
+        process VARCHAR(200) NOT NULL,
+        check_date DATE NOT NULL,
+        shift VARCHAR(10) NOT NULL DEFAULT 'a',
+        approval_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+        current_step INT NOT NULL DEFAULT 0,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        overall_result VARCHAR(5) NOT NULL DEFAULT 'OK' CHECK (overall_result IN ('OK', 'NG')),
+        note TEXT,
+        checked_by INT,
+        checked_by_name VARCHAR(100),
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- 1 แม่แบบ / 1 วัน / 1 กะ บันทึกได้ครั้งเดียว (ยกเว้นใบที่ถูก Reject สามารถทำใหม่ได้)
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_pm_record_daily
+        ON automation_lines.pm_records (template_id, check_date, shift)
+        WHERE status <> 'rejected';
+
+      CREATE TABLE IF NOT EXISTS automation_lines.pm_record_values (
+        id SERIAL PRIMARY KEY,
+        record_id INT NOT NULL REFERENCES automation_lines.pm_records(id) ON DELETE CASCADE,
+        item_id INT,
+        seq INT NOT NULL DEFAULT 0,
+        label TEXT NOT NULL,
+        check_type VARCHAR(20) NOT NULL,
+        unit VARCHAR(30),
+        min_value NUMERIC,
+        max_value NUMERIC,
+        value_bool BOOLEAN,
+        value_number NUMERIC,
+        result VARCHAR(5) CHECK (result IN ('OK', 'NG')),
+        remark TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS automation_lines.pm_approvals (
+        id SERIAL PRIMARY KEY,
+        record_id INT NOT NULL REFERENCES automation_lines.pm_records(id) ON DELETE CASCADE,
+        step_index INT NOT NULL,
+        position VARCHAR(30) NOT NULL,
+        action VARCHAR(10) NOT NULL CHECK (action IN ('approve', 'reject')),
+        approved_by INT,
+        approver_name VARCHAR(100),
+        comment TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_pm_records_date ON automation_lines.pm_records (check_date DESC);
+    `);
+    console.log('✅ ตาราง Daily PM Checklist พร้อมใช้งาน');
+  } catch (err) {
+    console.error('❌ สร้างตาราง Daily PM Checklist ไม่สำเร็จ:', err.message);
+  }
+};
+
 // ตรวจสอบและเตรียมตารางใน Database
 export const initDatabase = async () => {
   try {
@@ -44,6 +136,7 @@ export const initDatabase = async () => {
     await pool.query(`CREATE SCHEMA IF NOT EXISTS automation_lines;`);
 
     await migrateTaskAcceptedAt();
+    await migratePmChecklist();
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS auth.audit_logs (

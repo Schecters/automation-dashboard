@@ -22,6 +22,7 @@ import excelGraphRoutes from './routes/excelGraph.js';
 import stationAssignmentsRoutes from './routes/stationAssignments.js';
 import plcRoutes from './routes/plc.js';
 import operatorDataRoutes from './routes/operatorData.js';
+import pmChecklistRoutes from './routes/pmChecklist.js';
 
 const app = express();
 
@@ -75,6 +76,7 @@ app.use(excelGraphRoutes); // Microsoft Graph (เดิม Port 3000)
 app.use(stationAssignmentsRoutes);
 app.use(plcRoutes);
 app.use(operatorDataRoutes);
+app.use(pmChecklistRoutes); // Daily PM Checklist
 
 // ==========================================
 // ⚠️ Error handler กลาง: ไฟล์ผิดประเภท / ใหญ่เกิน / body ใหญ่เกิน -> ตอบ JSON 400/413

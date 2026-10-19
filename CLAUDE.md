@@ -76,3 +76,6 @@ git push
 - อัปโหลดไฟล์รับเฉพาะรูป JPG/PNG/WEBP/GIF ไม่เกิน 20MB (`src/api/lib/uploads.js`), body JSON ไม่เกิน 20MB
 - สิทธิ์ตรวจจาก role ใน DB เสมอ (`authenticateToken` ใน `src/api/middleware/auth.js`) ไม่เชื่อ role ใน JWT
 - 1 บัญชี ใช้ได้ 1 session (`current_session_token`) login ที่ใหม่จะเตะเครื่องเก่าออก
+- Daily PM Checklist: API `src/api/routes/pmChecklist.js`, ตาราง `automation_lines.pm_*` (สร้างอัตโนมัติใน `db.js`)
+  - หน้า `DailyCheckList.jsx` (กรอก/ประวัติ/อนุมัติ) และ `PmChecklistBuilder.jsx` (สร้างแม่แบบ: admin, me)
+  - ผู้อนุมัติ: ตำแหน่ง Line (owner/leader/supervisor จาก `line_owners`) หรือ role (me/ie/q/pd/admin), Admin อนุมัติแทนได้ทุกขั้น
