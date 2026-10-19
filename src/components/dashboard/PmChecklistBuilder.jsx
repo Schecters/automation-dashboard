@@ -137,6 +137,17 @@ export default function PmChecklistBuilder({ isDarkMode }) {
       items: prev.items.map((it, i) => (i === index ? { ...it, ...patch } : it)),
     }));
 
+  // แทรกหัวข้อย่อย/รายการใหม่ ณ ตำแหน่ง index (ไม่ต้องเพิ่มท้ายแล้วเลื่อนขึ้นลง)
+  const [focusKey, setFocusKey] = useState(null);
+  const insertAt = (index, checkType = "pass_fail") => {
+    const item = newItem(checkType);
+    setFocusKey(item.key);
+    setForm((prev) => ({
+      ...prev,
+      items: [...prev.items.slice(0, index), item, ...prev.items.slice(index)],
+    }));
+  };
+
   const handleEdit = (t) => {
     setMessage(null);
     setForm({
@@ -236,6 +247,36 @@ export default function PmChecklistBuilder({ isDarkMode }) {
   const iconBtn = `w-7 h-7 rounded-lg border text-xs flex items-center justify-center transition-colors disabled:opacity-30 ${
     isDarkMode ? "border-slate-700 hover:bg-slate-700 text-slate-300" : "border-gray-200 hover:bg-gray-100 text-gray-600"
   }`;
+
+  // แถบแทรกระหว่างแถว: ปกติจางไว้ ชี้เมาส์แล้วเห็นชัด (แถวท้ายสุดแสดงตลอด)
+  const renderInsertBar = (index, isLast = false) => (
+    <div className={`group flex items-center gap-2 ${isLast ? "pt-1" : "-my-1"}`}>
+      <div className={`flex-1 h-px ${isLast ? "" : "transition-colors group-hover:bg-blue-500/40"} ${isDarkMode ? "bg-slate-700/40" : "bg-gray-200/60"}`} />
+      <div className={`flex gap-1 ${isLast ? "" : "opacity-30 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"}`}>
+        <button
+          type="button"
+          onClick={() => insertAt(index, "section")}
+          title="แทรกหัวข้อย่อยตรงนี้"
+          className={`px-2 py-0.5 rounded-md text-[10px] font-bold border border-amber-500/40 text-amber-500 hover:bg-amber-500/10 ${
+            isDarkMode ? "bg-[#1E293B]" : "bg-white"
+          }`}
+        >
+          + หัวข้อย่อย
+        </button>
+        <button
+          type="button"
+          onClick={() => insertAt(index)}
+          title="แทรกรายการตรงนี้"
+          className={`px-2 py-0.5 rounded-md text-[10px] font-bold border border-blue-500/40 text-blue-500 hover:bg-blue-500/10 ${
+            isDarkMode ? "bg-[#1E293B]" : "bg-white"
+          }`}
+        >
+          + รายการ
+        </button>
+      </div>
+      <div className={`flex-1 h-px ${isLast ? "" : "transition-colors group-hover:bg-blue-500/40"} ${isDarkMode ? "bg-slate-700/40" : "bg-gray-200/60"}`} />
+    </div>
+  );
 
   if (!canEdit) {
     return (
@@ -473,10 +514,11 @@ export default function PmChecklistBuilder({ isDarkMode }) {
               หัวข้อย่อย = ใช้จัดกลุ่มและอธิบายรายการที่อยู่ด้านล่าง (เช่น "ระบบลม", "ระบบไฟฟ้า") ไม่ต้องเช็ค
             </p>
 
-            {form.items.map((it, i) =>
-              it.check_type === "section" ? (
+            {form.items.map((it, i) => (
+              <React.Fragment key={it.key}>
+              {renderInsertBar(i)}
+              {it.check_type === "section" ? (
                 <div
-                  key={it.key}
                   className={`p-3 rounded-xl border-l-4 border-amber-500 border space-y-2 ${
                     isDarkMode ? "border-y-slate-700 border-r-slate-700 bg-amber-500/5" : "border-y-gray-200 border-r-gray-200 bg-amber-50"
                   }`}
@@ -485,6 +527,7 @@ export default function PmChecklistBuilder({ isDarkMode }) {
                     <span className="text-[10px] font-black text-amber-500 shrink-0 w-14">หัวข้อย่อย</span>
                     <input
                       required
+                      autoFocus={it.key === focusKey}
                       value={it.label}
                       onChange={(e) => updateItem(i, { label: e.target.value })}
                       placeholder="ชื่อหัวข้อ เช่น ระบบลม (Pneumatic)"
@@ -519,6 +562,7 @@ export default function PmChecklistBuilder({ isDarkMode }) {
                   </span>
                   <input
                     required
+                    autoFocus={it.key === focusKey}
                     value={it.label}
                     onChange={(e) => updateItem(i, { label: e.target.value })}
                     placeholder="สิ่งที่ต้องเช็ค เช่น แรงดันลม, ไฟสถานะ Sensor"
@@ -597,8 +641,10 @@ export default function PmChecklistBuilder({ isDarkMode }) {
                   </p>
                 )}
               </div>
-              )
-            )}
+              )}
+              </React.Fragment>
+            ))}
+            {renderInsertBar(form.items.length, true)}
           </div>
 
           <div className={`flex flex-wrap items-center justify-between gap-2 pt-4 border-t ${isDarkMode ? "border-slate-700" : "border-gray-100"}`}>
