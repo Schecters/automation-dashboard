@@ -373,14 +373,9 @@ router.get('/api/pm/records', authenticateToken, async (req, res) => {
 });
 
 // ------------------------------------------
-// Export CSV (1 แถว = 1 รายการเช็ค) เลือกช่วงวันที่ได้ + กรอง Line / สถานะ
+// Export CSV แบบฟอร์ม: 1 ตาราง/เช็คลิสต์, แถว = รายการเช็ค, คอลัมน์ = วันที่, ท้ายตาราง = ผู้อนุมัติ
 // ------------------------------------------
 const MAX_EXPORT_DAYS = 366;
-
-// แปลง key ตำแหน่ง -> ชื่อที่อ่านได้ ใน SQL (ค่ามาจากค่าคงที่ในโค้ด ไม่ใช่ input ผู้ใช้)
-const POSITION_LABEL_SQL = `CASE a.position ${PM_APPROVAL_POSITIONS
-  .map((p) => `WHEN '${p.key}' THEN '${p.label}'`)
-  .join(' ')} ELSE a.position END`;
 
 // ใส่ "..." ทุกช่อง และกันสูตร Excel (ช่องข้อความที่ขึ้นต้นด้วย = + - @ ให้เติม ' นำหน้า)
 const csvCell = (value, { isText = true } = {}) => {
@@ -389,11 +384,6 @@ const csvCell = (value, { isText = true } = {}) => {
   if (isText && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return `"${s.replace(/"/g, '""')}"`;
 };
-
-const formatBangkok = (v) =>
-  v
-    ? new Date(v).toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok', hour12: false }).slice(0, 16)
-    : '';
 
 router.get('/api/pm/export.csv', authenticateToken, async (req, res) => {
   const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
@@ -412,91 +402,151 @@ router.get('/api/pm/export.csv', authenticateToken, async (req, res) => {
   }
 
   try {
-    const result = await pool.query(
-      `SELECT
-         r.id AS record_id, TO_CHAR(r.check_date, 'YYYY-MM-DD') AS check_date, r.line_id, r.process, r.template_name,
-         r.overall_result, r.status, r.approval_steps, r.current_step, r.checked_by, r.checked_by_name, r.created_at, r.note,
-         v.seq, v.label, v.description, v.check_type, v.unit,
-         v.min_value::float8 AS min_value, v.max_value::float8 AS max_value,
-         v.value_bool, v.value_number::float8 AS value_number, v.result, v.remark,
-         COALESCE((
-           SELECT STRING_AGG(
-             ${POSITION_LABEL_SQL} || ': ' || CASE WHEN a.action = 'approve' THEN 'อนุมัติ' ELSE 'ไม่อนุมัติ' END
-               || ' โดย ' || COALESCE(a.approver_name, '#' || a.approved_by::text)
-               || ' (' || TO_CHAR(a.created_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') || ')'
-               || COALESCE(' "' || a.comment || '"', ''),
-             ' | ' ORDER BY a.created_at, a.id)
-           FROM automation_lines.pm_approvals a WHERE a.record_id = r.id
-         ), '') AS approvals
+    const recordsResult = await pool.query(
+      `SELECT r.id, r.template_id, r.template_name, r.line_id, r.process,
+              TO_CHAR(r.check_date, 'YYYY-MM-DD') AS check_date,
+              r.overall_result, r.status, r.approval_steps, r.current_step,
+              r.checked_by, r.checked_by_name, r.created_at
        FROM automation_lines.pm_records r
-       JOIN automation_lines.pm_record_values v ON v.record_id = r.id
        WHERE r.check_date BETWEEN $1::date AND $2::date
          AND ($3::text IS NULL OR r.line_id = $3::text)
          AND ($4::text IS NULL OR r.status = $4::text)
-       ORDER BY r.check_date ASC, r.line_id ASC, r.process ASC, r.template_name ASC, r.id ASC, v.seq ASC, v.id ASC`,
+       ORDER BY r.line_id ASC, r.process ASC, r.template_name ASC, r.check_date ASC, r.created_at ASC`,
       [dateFrom, dateTo, line, status]
     );
+    const recordIds = recordsResult.rows.map((r) => r.id);
+    const [valuesResult, approvalsResult] = recordIds.length
+      ? await Promise.all([
+          pool.query(
+            `SELECT record_id, seq, label, check_type, unit,
+                    min_value::float8 AS min_value, max_value::float8 AS max_value,
+                    value_bool, value_number::float8 AS value_number, result
+             FROM automation_lines.pm_record_values WHERE record_id = ANY($1::int[])
+             ORDER BY record_id, seq, id`,
+            [recordIds]
+          ),
+          pool.query(
+            `SELECT record_id, step_index, action, approved_by, approver_name
+             FROM automation_lines.pm_approvals WHERE record_id = ANY($1::int[])
+             ORDER BY record_id, created_at, id`,
+            [recordIds]
+          ),
+        ])
+      : [{ rows: [] }, { rows: [] }];
 
-    const statusText = { pending: 'รออนุมัติ', approved: 'อนุมัติแล้ว', rejected: 'ไม่อนุมัติ' };
-    const header = [
-      'วันที่เช็ค', 'Line', 'Process', 'เช็คลิสต์', 'เลขใบ', 'หัวข้อย่อย', 'ข้อ', 'รายการที่เช็ค', 'คำอธิบาย',
-      'ชนิด', 'ค่าที่วัด', 'หน่วย', 'Min', 'Max', 'ผลรายข้อ', 'หมายเหตุรายข้อ',
-      'ผลรวมทั้งใบ', 'สถานะ', 'ผู้เช็ค', 'เวลาบันทึก', 'หมายเหตุรวม', 'ประวัติการอนุมัติ',
-    ];
-    const lines = [header.map((h) => csvCell(h)).join(',')];
-
-    // แถวหัวข้อย่อยไม่ออกเป็นแถว แต่ใส่เป็นคอลัมน์ "หัวข้อย่อย" ให้รายการที่อยู่ใต้หัวข้อนั้น
-    let currentRecord = null;
-    let currentSection = '';
-    let itemNo = 0;
-    for (const row of result.rows) {
-      if (row.record_id !== currentRecord) {
-        currentRecord = row.record_id;
-        currentSection = '';
-        itemNo = 0;
+    const groupBy = (rows) => {
+      const map = new Map();
+      for (const row of rows) {
+        if (!map.has(row.record_id)) map.set(row.record_id, []);
+        map.get(row.record_id).push(row);
       }
-      if (row.check_type === 'section') {
-        currentSection = row.label;
-        continue;
-      }
-      itemNo++;
+      return map;
+    };
+    const valuesByRecord = groupBy(valuesResult.rows);
+    const approvalsByRecord = groupBy(approvalsResult.rows);
 
-      const measured = row.check_type === 'pass_fail'
-        ? (row.value_bool === true ? 'OK' : row.value_bool === false ? 'NG' : '')
-        : row.value_number;
-      const pendingPos = row.status === 'pending' ? row.approval_steps?.[row.current_step] : null;
-
-      lines.push([
-        csvCell(row.check_date),
-        csvCell(row.line_id),
-        csvCell(row.process),
-        csvCell(row.template_name),
-        csvCell(row.record_id, { isText: false }),
-        csvCell(currentSection),
-        csvCell(itemNo, { isText: false }),
-        csvCell(row.label),
-        csvCell(row.description),
-        csvCell(row.check_type === 'number' ? 'ตัวเลข' : 'OK/NG'),
-        csvCell(measured, { isText: row.check_type !== 'number' }),
-        csvCell(row.unit),
-        csvCell(row.min_value, { isText: false }),
-        csvCell(row.max_value, { isText: false }),
-        csvCell(row.result),
-        csvCell(row.remark),
-        csvCell(row.overall_result),
-        csvCell(`${statusText[row.status] || row.status}${pendingPos ? ` (รอ ${POSITION_BY_KEY[pendingPos]?.label || pendingPos})` : ''}`),
-        csvCell(row.checked_by_name || (row.checked_by ? `#${row.checked_by}` : '')),
-        csvCell(formatBangkok(row.created_at)),
-        csvCell(row.note),
-        csvCell(row.approvals),
-      ].join(','));
+    // คอลัมน์วันที่ = ทุกวันในช่วงที่เลือก (ช่องว่าง = วันนั้นยังไม่ได้เช็ค)
+    const dates = [];
+    const endDate = new Date(`${dateTo}T00:00:00Z`);
+    for (let d = new Date(`${dateFrom}T00:00:00Z`); d <= endDate; d.setUTCDate(d.getUTCDate() + 1)) {
+      dates.push(d.toISOString().slice(0, 10));
     }
+    const dateHeader = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+
+    // 1 ตาราง ต่อ 1 เช็คลิสต์ (template) — วันเดียวกันมีหลายใบ ให้ใช้ใบที่ไม่ถูกตีกลับก่อน แล้วค่อยใบล่าสุด
+    const groups = new Map();
+    for (const r of recordsResult.rows) {
+      if (!groups.has(r.template_id)) groups.set(r.template_id, { info: r, byDate: new Map() });
+      const g = groups.get(r.template_id);
+      g.info = r; // ชื่อ / Line / Process / ผู้อนุมัติ ตามใบล่าสุด
+      const prev = g.byDate.get(r.check_date);
+      if (!prev || prev.status === 'rejected' || r.status !== 'rejected') g.byDate.set(r.check_date, r);
+    }
+
+    const exampleOf = (it) => {
+      if (it.check_type === 'pass_fail') return 'OK/NG';
+      const unit = it.unit ? ` ${it.unit}` : '';
+      if (it.min_value !== null && it.max_value !== null) return `${it.min_value}-${it.max_value}${unit}`;
+      if (it.min_value !== null) return `>= ${it.min_value}${unit}`;
+      if (it.max_value !== null) return `<= ${it.max_value}${unit}`;
+      return it.unit ? `(${it.unit})` : 'ตัวเลข';
+    };
+    const valueOf = (v) => {
+      if (v.check_type === 'pass_fail') return v.value_bool === true ? 'OK' : v.value_bool === false ? 'NG' : '';
+      if (v.value_number === null || v.value_number === undefined) return '';
+      return v.result === 'NG' ? `${v.value_number} (NG)` : v.value_number;
+    };
+
+    const out = [];
+    const pushRow = (cells) =>
+      out.push(cells.map((c) => (typeof c === 'number' ? csvCell(c, { isText: false }) : csvCell(c))).join(','));
+
+    for (const { info, byDate } of groups.values()) {
+      const dayRecords = dates.map((d) => byDate.get(d) || null);
+
+      // แถวรายการ: เรียงตามใบล่าสุด แล้วต่อท้ายรายการที่มีแค่ในใบเก่า (กรณีแก้แม่แบบระหว่างช่วง)
+      // key = หัวข้อย่อย + ชื่อรายการ + ชนิด เพราะ id รายการเปลี่ยนทุกครั้งที่แก้แม่แบบ
+      const rows = new Map();
+      for (const rec of dayRecords.filter(Boolean).reverse()) {
+        let section = '';
+        for (const v of valuesByRecord.get(rec.id) || []) {
+          if (v.check_type === 'section') section = v.label;
+          const key = `${v.check_type === 'section' ? '' : section}\u0000${v.label}\u0000${v.check_type}`;
+          if (!rows.has(key)) rows.set(key, { item: v, byRecord: new Map() });
+          rows.get(key).byRecord.set(rec.id, v);
+        }
+      }
+
+      pushRow([`เช็คลิสต์: ${info.template_name}`, `Line: ${info.line_id}`, `Process: ${info.process}`]);
+      pushRow(['item', 'Parameter Control', 'ตัวอย่าง', ...dates.map(dateHeader)]);
+
+      let itemNo = 0;
+      for (const { item, byRecord } of rows.values()) {
+        if (item.check_type === 'section') {
+          pushRow(['', item.label, '', ...dates.map(() => '')]);
+          continue;
+        }
+        itemNo++;
+        pushRow([
+          itemNo,
+          item.label,
+          exampleOf(item),
+          ...dayRecords.map((rec) => (rec && byRecord.has(rec.id) ? valueOf(byRecord.get(rec.id)) : '')),
+        ]);
+      }
+
+      pushRow(['', 'ผลรวม', '', ...dayRecords.map((rec) => rec?.overall_result || '')]);
+      pushRow(['', 'ผู้เช็ค', '', ...dayRecords.map((rec) => (rec ? rec.checked_by_name || `#${rec.checked_by}` : ''))]);
+
+      // แถวผู้อนุมัติ ตามลำดับตำแหน่งในแม่แบบ: ชื่อผู้อนุมัติของแต่ละวัน
+      const steps = Array.isArray(info.approval_steps) ? info.approval_steps : [];
+      steps.forEach((posKey, stepIndex) => {
+        pushRow([
+          '',
+          POSITION_BY_KEY[posKey]?.label || posKey,
+          '',
+          ...dayRecords.map((rec) => {
+            if (!rec) return '';
+            const act = (approvalsByRecord.get(rec.id) || []).filter((a) => a.step_index === stepIndex).pop();
+            if (act) {
+              const name = act.approver_name || `#${act.approved_by}`;
+              return act.action === 'approve' ? name : `ไม่อนุมัติ: ${name}`;
+            }
+            return rec.status === 'pending' && rec.current_step === stepIndex ? 'รออนุมัติ' : '';
+          }),
+        ]);
+      });
+
+      pushRow([]);
+    }
+
+    if (groups.size === 0) pushRow(['ไม่มีข้อมูลเช็คลิสต์ในช่วงวันที่ที่เลือก']);
 
     const fileName = `PM_Checklist_${dateFrom}_to_${dateTo}${line ? `_${line.replace(/[^\w-]/g, '_')}` : ''}.csv`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     // ﻿ (BOM) ทำให้ Excel อ่านภาษาไทยถูก
-    res.send(`﻿${lines.join('\r\n')}`);
+    res.send(`﻿${out.join('\r\n')}`);
   } catch (err) {
     console.error('Export PM CSV Error:', err);
     res.status(500).json({ success: false, message: 'Export CSV ไม่สำเร็จ' });
