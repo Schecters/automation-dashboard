@@ -372,6 +372,137 @@ router.get('/api/pm/records', authenticateToken, async (req, res) => {
   }
 });
 
+// ------------------------------------------
+// Export CSV (1 แถว = 1 รายการเช็ค) เลือกช่วงวันที่ได้ + กรอง Line / สถานะ
+// ------------------------------------------
+const MAX_EXPORT_DAYS = 366;
+
+// แปลง key ตำแหน่ง -> ชื่อที่อ่านได้ ใน SQL (ค่ามาจากค่าคงที่ในโค้ด ไม่ใช่ input ผู้ใช้)
+const POSITION_LABEL_SQL = `CASE a.position ${PM_APPROVAL_POSITIONS
+  .map((p) => `WHEN '${p.key}' THEN '${p.label}'`)
+  .join(' ')} ELSE a.position END`;
+
+// ใส่ "..." ทุกช่อง และกันสูตร Excel (ช่องข้อความที่ขึ้นต้นด้วย = + - @ ให้เติม ' นำหน้า)
+const csvCell = (value, { isText = true } = {}) => {
+  if (value === null || value === undefined) return '';
+  let s = String(value);
+  if (isText && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+};
+
+const formatBangkok = (v) =>
+  v
+    ? new Date(v).toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok', hour12: false }).slice(0, 16)
+    : '';
+
+router.get('/api/pm/export.csv', authenticateToken, async (req, res) => {
+  const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+  const dateFrom = req.query.date_from;
+  const dateTo = req.query.date_to;
+  const line = req.query.line ? String(req.query.line).trim() : null;
+  const status = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
+
+  if (!isDate(dateFrom) || !isDate(dateTo)) {
+    return res.status(400).json({ success: false, message: 'กรุณาเลือกช่วงวันที่ (ตั้งแต่ - ถึง) ให้ถูกต้อง' });
+  }
+  const days = (new Date(dateTo) - new Date(dateFrom)) / 86400000;
+  if (days < 0) return res.status(400).json({ success: false, message: 'วันที่เริ่มต้นต้องไม่มากกว่าวันที่สิ้นสุด' });
+  if (days > MAX_EXPORT_DAYS) {
+    return res.status(400).json({ success: false, message: `Export ได้ครั้งละไม่เกิน ${MAX_EXPORT_DAYS} วัน` });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT
+         r.id AS record_id, TO_CHAR(r.check_date, 'YYYY-MM-DD') AS check_date, r.line_id, r.process, r.template_name,
+         r.overall_result, r.status, r.approval_steps, r.current_step, r.checked_by, r.checked_by_name, r.created_at, r.note,
+         v.seq, v.label, v.description, v.check_type, v.unit,
+         v.min_value::float8 AS min_value, v.max_value::float8 AS max_value,
+         v.value_bool, v.value_number::float8 AS value_number, v.result, v.remark,
+         COALESCE((
+           SELECT STRING_AGG(
+             ${POSITION_LABEL_SQL} || ': ' || CASE WHEN a.action = 'approve' THEN 'อนุมัติ' ELSE 'ไม่อนุมัติ' END
+               || ' โดย ' || COALESCE(a.approver_name, '#' || a.approved_by::text)
+               || ' (' || TO_CHAR(a.created_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') || ')'
+               || COALESCE(' "' || a.comment || '"', ''),
+             ' | ' ORDER BY a.created_at, a.id)
+           FROM automation_lines.pm_approvals a WHERE a.record_id = r.id
+         ), '') AS approvals
+       FROM automation_lines.pm_records r
+       JOIN automation_lines.pm_record_values v ON v.record_id = r.id
+       WHERE r.check_date BETWEEN $1::date AND $2::date
+         AND ($3::text IS NULL OR r.line_id = $3::text)
+         AND ($4::text IS NULL OR r.status = $4::text)
+       ORDER BY r.check_date ASC, r.line_id ASC, r.process ASC, r.template_name ASC, r.id ASC, v.seq ASC, v.id ASC`,
+      [dateFrom, dateTo, line, status]
+    );
+
+    const statusText = { pending: 'รออนุมัติ', approved: 'อนุมัติแล้ว', rejected: 'ไม่อนุมัติ' };
+    const header = [
+      'วันที่เช็ค', 'Line', 'Process', 'เช็คลิสต์', 'เลขใบ', 'หัวข้อย่อย', 'ข้อ', 'รายการที่เช็ค', 'คำอธิบาย',
+      'ชนิด', 'ค่าที่วัด', 'หน่วย', 'Min', 'Max', 'ผลรายข้อ', 'หมายเหตุรายข้อ',
+      'ผลรวมทั้งใบ', 'สถานะ', 'ผู้เช็ค', 'เวลาบันทึก', 'หมายเหตุรวม', 'ประวัติการอนุมัติ',
+    ];
+    const lines = [header.map((h) => csvCell(h)).join(',')];
+
+    // แถวหัวข้อย่อยไม่ออกเป็นแถว แต่ใส่เป็นคอลัมน์ "หัวข้อย่อย" ให้รายการที่อยู่ใต้หัวข้อนั้น
+    let currentRecord = null;
+    let currentSection = '';
+    let itemNo = 0;
+    for (const row of result.rows) {
+      if (row.record_id !== currentRecord) {
+        currentRecord = row.record_id;
+        currentSection = '';
+        itemNo = 0;
+      }
+      if (row.check_type === 'section') {
+        currentSection = row.label;
+        continue;
+      }
+      itemNo++;
+
+      const measured = row.check_type === 'pass_fail'
+        ? (row.value_bool === true ? 'OK' : row.value_bool === false ? 'NG' : '')
+        : row.value_number;
+      const pendingPos = row.status === 'pending' ? row.approval_steps?.[row.current_step] : null;
+
+      lines.push([
+        csvCell(row.check_date),
+        csvCell(row.line_id),
+        csvCell(row.process),
+        csvCell(row.template_name),
+        csvCell(row.record_id, { isText: false }),
+        csvCell(currentSection),
+        csvCell(itemNo, { isText: false }),
+        csvCell(row.label),
+        csvCell(row.description),
+        csvCell(row.check_type === 'number' ? 'ตัวเลข' : 'OK/NG'),
+        csvCell(measured, { isText: row.check_type !== 'number' }),
+        csvCell(row.unit),
+        csvCell(row.min_value, { isText: false }),
+        csvCell(row.max_value, { isText: false }),
+        csvCell(row.result),
+        csvCell(row.remark),
+        csvCell(row.overall_result),
+        csvCell(`${statusText[row.status] || row.status}${pendingPos ? ` (รอ ${POSITION_BY_KEY[pendingPos]?.label || pendingPos})` : ''}`),
+        csvCell(row.checked_by_name || (row.checked_by ? `#${row.checked_by}` : '')),
+        csvCell(formatBangkok(row.created_at)),
+        csvCell(row.note),
+        csvCell(row.approvals),
+      ].join(','));
+    }
+
+    const fileName = `PM_Checklist_${dateFrom}_to_${dateTo}${line ? `_${line.replace(/[^\w-]/g, '_')}` : ''}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    // ﻿ (BOM) ทำให้ Excel อ่านภาษาไทยถูก
+    res.send(`﻿${lines.join('\r\n')}`);
+  } catch (err) {
+    console.error('Export PM CSV Error:', err);
+    res.status(500).json({ success: false, message: 'Export CSV ไม่สำเร็จ' });
+  }
+});
+
 router.get('/api/pm/records/:id', authenticateToken, async (req, res) => {
   const recordId = Number(req.params.id);
   try {

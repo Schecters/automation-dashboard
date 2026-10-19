@@ -89,6 +89,7 @@ export default function DailyCheckList({ isDarkMode }) {
   const [histTo, setHistTo] = useState(todayBangkok);
   const [histLine, setHistLine] = useState("");
   const [histStatus, setHistStatus] = useState("");
+  const [exporting, setExporting] = useState(false);
   const [onlyMine, setOnlyMine] = useState(false);
   const [records, setRecords] = useState([]);
   const [loadingRecords, setLoadingRecords] = useState(false);
@@ -326,6 +327,41 @@ export default function DailyCheckList({ isDarkMode }) {
       loadMyPending();
     } catch (err) {
       setMessage({ type: "error", text: err.message });
+    }
+  };
+
+  // Export CSV ตามช่วงวันที่ + Line + สถานะ ที่เลือกอยู่ (1 แถว = 1 รายการเช็ค)
+  const handleExportCsv = async () => {
+    if (!histFrom || !histTo) {
+      setMessage({ type: "error", text: "กรุณาเลือกช่วงวันที่ (ตั้งแต่ - ถึง) ก่อน Export" });
+      return;
+    }
+    setExporting(true);
+    try {
+      const qs = new URLSearchParams({ date_from: histFrom, date_to: histTo });
+      if (histLine) qs.set("line", histLine);
+      if (histStatus) qs.set("status", histStatus);
+      const res = await fetch(`${API_URL}/pm/export.csv?${qs}`, { headers: getHeaders() });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "Export CSV ไม่สำเร็จ");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const fileName = disposition.match(/filename="([^"]+)"/)?.[1] || `PM_Checklist_${histFrom}_to_${histTo}.csv`;
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setMessage({ type: "error", text: err.message });
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -649,13 +685,24 @@ export default function DailyCheckList({ isDarkMode }) {
               <input type="checkbox" checked={onlyMine} onChange={(e) => setOnlyMine(e.target.checked)} />
               เฉพาะที่รอฉันอนุมัติ
             </label>
-            <button
-              type="button"
-              onClick={loadRecords}
-              className="ml-auto px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              {loadingRecords ? "กำลังโหลด..." : "Refresh"}
-            </button>
+            <div className="ml-auto flex gap-2">
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                disabled={exporting}
+                title="ดาวน์โหลด CSV ตามช่วงวันที่ / Line / สถานะ ที่เลือก (เปิดด้วย Excel ได้)"
+                className="px-4 py-2 rounded-xl text-xs font-bold border border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10 disabled:opacity-50"
+              >
+                {exporting ? "กำลัง Export..." : "⬇ Export CSV"}
+              </button>
+              <button
+                type="button"
+                onClick={loadRecords}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {loadingRecords ? "กำลังโหลด..." : "Refresh"}
+              </button>
+            </div>
           </div>
 
           <div className={`rounded-2xl border overflow-hidden ${card}`}>
