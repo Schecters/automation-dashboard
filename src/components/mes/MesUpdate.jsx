@@ -65,6 +65,27 @@ const EMPTY_STATION_FORM = { id: null, label: "", line: "", section_name: "", gr
 // การเชื่อมต่อเครื่องสแกน: mode "tcp" = Keyence ส่งผลอ่านมาทาง TCP data port, "modbus" = อ่าน register
 // (ค่าที่บันทึกไว้รุ่นก่อนไม่มี mode = modbus)
 const scannerMode = (cfg) => cfg?.mode || "modbus";
+// เครื่องสแกนต่อกับ PC หน้าไลน์ (network แยก) -> PC เครื่องนี้ต่อเอง ผ่านโปรแกรม MES Bridge
+// (tools/mes-bridge/start-mes-bridge.bat) เพราะเบราว์เซอร์ต่อ TCP / Modbus เองไม่ได้
+const BRIDGE_URL = "http://127.0.0.1:18080";
+const BRIDGE_MISSING = "ไม่พบโปรแกรม MES Bridge บนเครื่องนี้ — เปิด start-mes-bridge.bat ก่อน";
+
+const bridgeRead = async (path, body) => {
+  let res;
+  try {
+    res = await fetch(`${BRIDGE_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error(BRIDGE_MISSING);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!data.success) throw new Error(data.message || `MES Bridge ตอบ HTTP ${res.status}`);
+  return data;
+};
+
 const SOURCE_LABEL = { TCP: "จาก Keyence (TCP)", Modbus: "จาก Modbus", Scanner: "จาก Scanner" };
 
 const EMPTY_MODBUS_FORM = {
@@ -345,18 +366,8 @@ export default function MesUpdate({ isDarkMode = false }) {
     // TCP data port: รับทุกครั้งที่สแกน (ชิ้นเดิมซ้ำก็นับ) ตามลำดับ
     const tickTcp = async () => {
       const cfg = modbusCfgRef.current;
-      const res = await fetch(`${API_URL}/mes/tcp/read`, {
-        method: "POST",
-        headers: operatorHeaders(),
-        body: JSON.stringify({ host: cfg.modbus_host, port: cfg.tcp_port, after: tcpAfterRef.current }),
-      });
-      if (await handleOperator401(res)) return false;
-      const data = await res.json();
+      const data = await bridgeRead("/tcp/read", { host: cfg.modbus_host, port: Number(cfg.tcp_port), after: tcpAfterRef.current });
       if (cancelled) return false;
-      if (!data.success) {
-        setModbusStatus({ ok: false, text: data.message });
-        return true;
-      }
       setModbusStatus({ ok: !data.error, text: data.error || "เชื่อมต่อแล้ว" });
       if (tcpAfterRef.current === null) {
         tcpAfterRef.current = data.seq;
@@ -367,7 +378,7 @@ export default function MesUpdate({ isDarkMode = false }) {
         tcpAfterRef.current = item.seq;
         await processScan(item.sn, "TCP");
       }
-      if (data.items.length === 0 && data.seq < tcpAfterRef.current) tcpAfterRef.current = data.seq; // server เริ่มนับใหม่
+      if (data.items.length === 0 && data.seq < tcpAfterRef.current) tcpAfterRef.current = data.seq; // Bridge เริ่มนับใหม่
       return true;
     };
 
@@ -376,17 +387,9 @@ export default function MesUpdate({ isDarkMode = false }) {
         if (!sendingRef.current && scannerMode(modbusCfgRef.current) === "tcp") {
           if (!(await tickTcp())) return;
         } else if (!sendingRef.current) {
-          const res = await fetch(`${API_URL}/mes/modbus/read`, {
-            method: "POST",
-            headers: operatorHeaders(),
-            body: JSON.stringify(modbusCfgRef.current),
-          });
-          if (await handleOperator401(res)) return;
-          const data = await res.json();
+          const data = await bridgeRead("/modbus/read", modbusCfgRef.current);
           if (cancelled) return;
-          if (!data.success) {
-            setModbusStatus({ ok: false, text: data.message });
-          } else {
+          {
             setModbusStatus({ ok: true, text: "เชื่อมต่อแล้ว" });
             const sn = data.sn;
             if (!sn) {
@@ -408,7 +411,7 @@ export default function MesUpdate({ isDarkMode = false }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [mesAuth, modbusReady, hasLocked, modbusCfg, operatorHeaders, handleOperator401, processScan]);
+  }, [mesAuth, modbusReady, hasLocked, modbusCfg, processScan]);
 
   // ---------- operator actions ----------
   const applyOperatorAuth = (auth) => {
@@ -513,17 +516,6 @@ export default function MesUpdate({ isDarkMode = false }) {
     if (showSettings && staff && lineInfo.length === 0) fetchLineInfo();
   }, [showSettings, staff, lineInfo.length, fetchLineInfo]);
 
-  const staffFetch = async (url, options) => {
-    const res = await fetch(url, { ...options, headers: staffHeaders() });
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 401) {
-      setStaff(null);
-      throw new Error("Session ME/Admin หมดอายุ กรุณาเข้าสู่ระบบใหม่");
-    }
-    if (!data.success) throw new Error(data.message || `HTTP ${res.status}`);
-    return data;
-  };
-
   // ตั้งชื่อเครื่องนี้ (ใช้ระบุในไฟล์ log)
   const applyTerminal = () => {
     const name = terminalInput.trim().slice(0, 100);
@@ -564,13 +556,11 @@ export default function MesUpdate({ isDarkMode = false }) {
   };
 
   // TCP: after -1 = ขอค่าที่เคยได้รับทั้งหมด (ดูค่าล่าสุด) / Modbus: อ่าน register ตอนนี้
+  // ทดสอบจาก PC เครื่องนี้ผ่าน MES Bridge (ทดสอบไม่ล้าง register)
   const testScannerRequest = (form) =>
     scannerMode(form) === "tcp"
-      ? staffFetch(`${API_URL}/mes/tcp/read`, {
-          method: "POST",
-          body: JSON.stringify({ host: form.modbus_host, port: form.tcp_port, after: -1 }),
-        })
-      : staffFetch(`${API_URL}/mes/modbus/read`, { method: "POST", body: JSON.stringify(form) });
+      ? bridgeRead("/tcp/read", { host: form.modbus_host, port: Number(form.tcp_port), after: -1 })
+      : bridgeRead("/modbus/read", { ...form, clear_after_read: false });
 
   const testModbus = async () => {
     setTestResult({ loading: true });
@@ -766,7 +756,11 @@ export default function MesUpdate({ isDarkMode = false }) {
                 </span>
               : <span className="text-gray-400">— ยังไม่ได้ตั้ง (ใช้สแกนลงช่องในหน้าเว็บได้)</span>}
           </div>
-          <p className="text-[11px] text-gray-400">ตั้งครั้งเดียว ใช้กับทุก station ของเครื่องนี้ — สแกน 1 ครั้งส่งให้ทุก station ที่ Lock ตามลำดับ</p>
+          <p className="text-[11px] text-gray-400">
+            ตั้งครั้งเดียว ใช้กับทุก station ของเครื่องนี้ — สแกน 1 ครั้งส่งให้ทุก station ที่ Lock ตามลำดับ
+            <br />
+            PC เครื่องนี้เป็นตัวต่อเครื่องสแกนเอง ต้องเปิดโปรแกรม <b>MES Bridge</b> (start-mes-bridge.bat) ค้างไว้
+          </p>
           <div className="flex flex-wrap gap-2">
             {[
               ["tcp", "TCP data port (แนะนำ)"],

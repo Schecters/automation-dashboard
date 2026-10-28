@@ -4,8 +4,6 @@ import { io } from '../lib/realtime.js';
 import { JWT_SECRET } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
-import { readScan, validateModbusConfig } from '../lib/modbusReader.js';
-import { pollTcpScans } from '../lib/tcpScanReader.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs } from '../lib/mesLog.js';
 import { findOperatorExams } from './operatorData.js';
 import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
@@ -16,7 +14,7 @@ const router = express.Router();
 // 🏭 MES Update (หน้า /MES) — ไม่ใช้ Database
 //  - operator login ด้วยรหัสพนักงาน ต้องเคยทำข้อสอบ (Excel) token หมดอายุ 07:40 / 19:40
 //  - การตั้งค่าของแต่ละเครื่อง (ชื่อเครื่อง / Modbus / station) เก็บในเบราว์เซอร์ของเครื่องนั้น
-//  - API นี้: ดึง Line/Station/WO จาก MES, อ่านเครื่องสแกนผ่าน Modbus TCP, ยิง routing-update
+//  - API นี้: ดึง Line/Station/WO จาก MES, ยิง routing-update (อ่านเครื่องสแกนทำที่ MES Bridge บน PC หน้าไลน์)
 //  - ประวัติเขียนเป็นไฟล์ CSV ที่ MES_LOG_DIR (default D:\MES logs)
 // ==========================================
 
@@ -157,73 +155,8 @@ router.get('/api/mes/molist', authenticateMesOrStaff, async (req, res) => {
   }
 });
 
-// ------------------------------------------
-// อ่านเครื่องสแกนผ่าน Modbus TCP — ค่าตั้งส่งมาจากหน้าเว็บ (เก็บในเครื่องนั้น)
-// ------------------------------------------
-// อนุญาตเฉพาะ IP ภายในโรงงาน (กันใช้ server ไปเชื่อมต่อที่อื่น)
-const isPrivateIPv4 = (host) => {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  if (m.slice(1).some((x) => Number(x) > 255)) return false;
-  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a === 127;
-};
-
-const parseModbusBody = (body) => {
-  const cfg = {
-    modbus_host: text(body?.modbus_host, 100),
-    modbus_port: Number(body?.modbus_port ?? 502),
-    unit_id: Number(body?.unit_id ?? 1),
-    register_type: body?.register_type === 'input' ? 'input' : 'holding',
-    start_address: Number(body?.start_address ?? 0),
-    word_count: Number(body?.word_count ?? 20),
-    byte_order: body?.byte_order === 'LE' ? 'LE' : 'BE',
-    clear_after_read: Boolean(body?.clear_after_read),
-  };
-  const err = validateModbusConfig(cfg);
-  if (err) return { error: err };
-  if (!isPrivateIPv4(cfg.modbus_host)) return { error: 'IP เครื่องสแกนต้องเป็น IP ภายใน (10.x / 172.16-31.x / 192.168.x)' };
-  return { cfg };
-};
-
-// operator: อ่านจริง (ล้าง register ตามที่ตั้ง) / ME-admin: ทดสอบ (ไม่ล้าง)
-router.post('/api/mes/modbus/read', authenticateMesOrStaff, async (req, res) => {
-  const { error, cfg } = parseModbusBody(req.body);
-  if (error) return res.status(400).json({ success: false, message: error });
-  if (!req.mesOperator) cfg.clear_after_read = false;
-  try {
-    const { text: sn, raw } = await readScan(cfg);
-    res.json({ success: true, sn, raw });
-  } catch (err) {
-    res.status(502).json({ success: false, message: `อ่าน Modbus ไม่ได้: ${err.message}` });
-  }
-});
-
-// ------------------------------------------
-// รับค่าจากเครื่องสแกนผ่าน TCP data port (Keyence ส่งผลอ่านมาเอง เช่น port 9004)
-// body { host, port, after } -> { connected, error, seq, items: [{ seq, sn, at }] }
-// ------------------------------------------
-router.post('/api/mes/tcp/read', authenticateMesOrStaff, async (req, res) => {
-  const host = text(req.body?.host, 100);
-  const port = Number(req.body?.port ?? 9004);
-  const after = req.body?.after === null || req.body?.after === undefined ? null : Number(req.body.after);
-  if (!host || !isPrivateIPv4(host)) {
-    return res.status(400).json({ success: false, message: 'IP เครื่องสแกนต้องเป็น IP ภายใน (10.x / 172.16-31.x / 192.168.x)' });
-  }
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return res.status(400).json({ success: false, message: 'Port ไม่ถูกต้อง' });
-  }
-  if (after !== null && !Number.isInteger(after)) return res.status(400).json({ success: false, message: 'after ไม่ถูกต้อง' });
-  try {
-    const r = await pollTcpScans({ host, port, after });
-    if (!r.connected) {
-      return res.status(502).json({ success: false, message: `เชื่อมต่อเครื่องสแกน ${host}:${port} ไม่ได้${r.error ? `: ${r.error}` : ''}` });
-    }
-    res.json({ success: true, ...r });
-  } catch (err) {
-    res.status(502).json({ success: false, message: `อ่านเครื่องสแกนไม่ได้: ${err.message}` });
-  }
-});
+// การอ่านเครื่องสแกน (TCP data port / Modbus TCP) ทำบน PC หน้าไลน์ผ่านโปรแกรม MES Bridge
+// (tools/mes-bridge) เพราะเครื่องสแกนอยู่ใน network ของ PC นั้น server เข้าไม่ถึง
 
 // ------------------------------------------
 // ยิง routing-update ให้ 1 station (หน้าเว็บเรียกทีละ station ตามลำดับบนลงล่าง)

@@ -86,9 +86,11 @@ git push
     ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
     รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1` (`buildRoutingRow`) ปกติ PASS, กดปุ่ม FAIL แล้วสแกน = FAIL
-  - รับ QR จาก Keyence ตั้งครั้งเดียวต่อเครื่อง (IP ภายในเท่านั้น) 2 แบบ:
-    TCP data port เช่น 9004 (`src/api/lib/tcpScanReader.js` ต่อค้าง 1 connection/เครื่องสแกน, ใช้กับ SR series ที่ Modbus ต่อไม่ได้)
-    หรือ Modbus TCP (`src/api/lib/modbusReader.js`, package `modbus-serial`)
+  - รับ QR จาก Keyence: **PC หน้าไลน์ต่อเครื่องสแกนเอง** ผ่านโปรแกรม MES Bridge (`tools/mes-bridge/mes-bridge.cjs`,
+    เปิดด้วย `start-mes-bridge.bat`, ต้องมี Node.js ไม่ต้องลง package) ฟังที่ `http://127.0.0.1:18080` หน้าเว็บเรียกตรง
+    (เครื่องสแกนอยู่ network ของ PC นั้น เช่น 192.168.1.x server เข้าไม่ถึง / เบราว์เซอร์ต่อ TCP เองไม่ได้)
+    2 แบบ: TCP data port เช่น 9004 (Keyence SR) หรือ Modbus TCP — server ไม่ได้ต่อเครื่องสแกนแล้ว
+    ถ้าเปลี่ยน URL เว็บ ต้องเพิ่มใน `MES_BRIDGE_ORIGINS` ของ Bridge
     สแกน 1 ครั้ง → ส่งให้ทุก station ที่ Lock ตามลำดับบนลงล่าง (หยุดเมื่อ station ใดไม่สำเร็จ หรือส่ง FAIL แล้ว)
   - การตั้งค่าของแต่ละเครื่อง เก็บในเบราว์เซอร์เครื่องนั้น: `mesTerminal` (ชื่อเครื่อง), `mesModbus`, `mesStations`
     แก้ได้เฉพาะ ME, admin (หน้าตั้งค่าต้อง login) / ล้างข้อมูลเบราว์เซอร์ = ต้องตั้งค่าใหม่
