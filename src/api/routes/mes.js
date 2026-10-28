@@ -271,8 +271,9 @@ router.post('/api/mes/stations', ...requireStaff, async (req, res) => {
          (terminal, sort_order, label, line, section_name, group_name, station, modbus_host, modbus_port, unit_id,
           register_type, start_address, word_count, byte_order, clear_after_read, updated_by)
        VALUES (
-         $15,
-         (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM automation_lines.mes_stations WHERE is_active = TRUE AND terminal = $15),
+         $15::varchar,
+         (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM automation_lines.mes_stations
+          WHERE is_active = TRUE AND terminal = $15::varchar),
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING ${STATION_COLUMNS}`,
       [data.label, data.line, data.section_name, data.group_name, data.station, data.modbus_host, data.modbus_port,
