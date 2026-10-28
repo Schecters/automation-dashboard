@@ -41,7 +41,7 @@ const validPort = (p) => Number.isInteger(p) && p >= 1 && p <= 65535;
 // ------------------------------------------
 const TCP_MAX_ITEMS = 50;
 const TCP_RECONNECT_MS = 3000;
-const TCP_IDLE_CLOSE_MS = 5 * 60 * 1000;
+const TCP_IDLE_CLOSE_MS = 15 * 1000; // หน้าเว็บเลิกถามเกินนี้ -> ปิด ให้เครื่องอื่นต่อได้
 const TCP_CONNECT_TIMEOUT_MS = 3000;
 const tcpReaders = new Map();
 
@@ -102,15 +102,20 @@ const createTcpReader = (host, port) => {
   return r;
 };
 
+const closeTcpReader = (key, reason) => {
+  const r = tcpReaders.get(key);
+  if (!r) return false;
+  r.close();
+  tcpReaders.delete(key);
+  log(`[INFO] TCP ${key} disconnected (${reason})`);
+  return true;
+};
+
 setInterval(() => {
   for (const [key, r] of tcpReaders) {
-    if (Date.now() - r.lastPollAt > TCP_IDLE_CLOSE_MS) {
-      r.close();
-      tcpReaders.delete(key);
-      log(`[INFO] TCP ${key} closed (not used by web page)`);
-    }
+    if (Date.now() - r.lastPollAt > TCP_IDLE_CLOSE_MS) closeTcpReader(key, 'idle');
   }
-}, 60000).unref();
+}, 5000).unref();
 
 const waitUntil = (fn, ms) =>
   new Promise((resolve) => {
@@ -145,14 +150,36 @@ const tcpRead = async ({ host, port, after }) => {
 // Modbus TCP (FC3 / FC4 อ่าน, FC16 เขียนล้าง) — 1 connection ต่อ host:port ใช้ทีละ request
 // ------------------------------------------
 const MODBUS_TIMEOUT_MS = 2000;
-const modbusConns = new Map(); // key -> { socket, buffer, pending, queue, tid }
+// Keyence รับ Modbus client ได้จำกัด (มักแค่ 1) -> ไม่ใช้งานเกินนี้ปิด connection ทันที ให้เครื่องอื่นต่อได้
+// (หน้าเว็บอ่านทุก ~0.7 วินาที ระหว่าง Lock จึงยังต่อค้างไว้)
+const MODBUS_IDLE_CLOSE_MS = 3000;
+const modbusConns = new Map(); // key -> conn ที่ต่อแล้ว
+const modbusConnecting = new Map(); // key -> Promise<conn> กันเปิดหลาย connection พร้อมกัน
 
-const getModbusConn = (host, port) =>
-  new Promise((resolve, reject) => {
-    const key = `${host}:${port}`;
-    const existing = modbusConns.get(key);
-    if (existing && !existing.socket.destroyed && existing.ready) return resolve(existing);
-    const conn = { socket: null, buffer: Buffer.alloc(0), pending: null, queue: Promise.resolve(), tid: 0, ready: false };
+const closeModbusConn = (key, reason) => {
+  const conn = modbusConns.get(key);
+  if (!conn) return false;
+  modbusConns.delete(key);
+  clearTimeout(conn.idleTimer);
+  // ปิดแบบสุภาพ (FIN) ให้เครื่องสแกนรู้ว่าเลิกใช้แล้ว ถ้าไม่ปิดเองใน 1 วินาทีค่อยตัดทิ้ง
+  conn.socket.end();
+  setTimeout(() => conn.socket.destroy(), 1000).unref();
+  log(`[INFO] Modbus ${key} disconnected (${reason})`);
+  return true;
+};
+
+const touchModbusConn = (key, conn) => {
+  clearTimeout(conn.idleTimer);
+  conn.idleTimer = setTimeout(() => closeModbusConn(key, 'idle'), MODBUS_IDLE_CLOSE_MS);
+};
+
+const getModbusConn = (host, port) => {
+  const key = `${host}:${port}`;
+  const existing = modbusConns.get(key);
+  if (existing && !existing.socket.destroyed && existing.ready) return Promise.resolve(existing);
+  if (modbusConnecting.has(key)) return modbusConnecting.get(key);
+  const promise = new Promise((resolve, reject) => {
+    const conn = { socket: null, buffer: Buffer.alloc(0), pending: null, queue: Promise.resolve(), tid: 0, ready: false, idleTimer: null };
     const socket = net.createConnection({ host, port });
     conn.socket = socket;
     socket.setTimeout(MODBUS_TIMEOUT_MS);
@@ -160,6 +187,7 @@ const getModbusConn = (host, port) =>
       conn.ready = true;
       socket.setTimeout(0);
       modbusConns.set(key, conn);
+      log(`[OK] Modbus connected ${key}`);
       resolve(conn);
     });
     socket.on('timeout', () => socket.destroy(new Error('เชื่อมต่อไม่ทันเวลา')));
@@ -187,7 +215,8 @@ const getModbusConn = (host, port) =>
       }
     });
     socket.on('close', () => {
-      modbusConns.delete(key);
+      clearTimeout(conn.idleTimer);
+      if (modbusConns.get(key) === conn) modbusConns.delete(key);
       if (conn.pending) {
         clearTimeout(conn.pending.timer);
         conn.pending.reject(new Error('connection ถูกปิด'));
@@ -195,11 +224,17 @@ const getModbusConn = (host, port) =>
       }
     });
   });
+  modbusConnecting.set(key, promise);
+  const clear = () => modbusConnecting.delete(key);
+  promise.then(clear, clear);
+  return promise;
+};
 
 const MODBUS_EXCEPTIONS = { 1: 'Illegal function', 2: 'Illegal data address', 3: 'Illegal data value', 4: 'Device failure' };
 
 const modbusRequest = async (host, port, unitId, pdu) => {
   const conn = await getModbusConn(host, port);
+  clearTimeout(conn.idleTimer); // กำลังใช้งาน ห้ามปิดกลางคัน
   const run = conn.queue.then(
     () =>
       new Promise((resolve, reject) => {
@@ -219,7 +254,7 @@ const modbusRequest = async (host, port, unitId, pdu) => {
       })
   );
   conn.queue = run.catch(() => {});
-  const res = await run;
+  const res = await run.finally(() => touchModbusConn(`${host}:${port}`, conn));
   if (res[0] & 0x80) throw new Error(`Modbus exception: ${MODBUS_EXCEPTIONS[res[1]] || res[1]}`);
   return res;
 };
@@ -341,8 +376,25 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { success: true, ...(await tcpRead({ host, port, after })) });
     }
     if (req.method === 'POST' && url.pathname === '/modbus/read') {
-      const cfg = parseModbusCfg(await readBody(req));
-      return sendJson(res, 200, { success: true, ...(await modbusRead(cfg)) });
+      const body = await readBody(req);
+      const cfg = parseModbusCfg(body);
+      try {
+        return sendJson(res, 200, { success: true, ...(await modbusRead(cfg)) });
+      } finally {
+        // ทดสอบจากหน้าตั้งค่า: อ่านเสร็จปิดทันที ไม่ถือ connection ไว้
+        if (body.close) closeModbusConn(`${cfg.host}:${cfg.port}`, 'test done');
+      }
+    }
+    // หน้าเว็บเลิกใช้ (Unlock / ปิดหน้า / เปลี่ยนการตั้งค่า) -> ปิด connection ทันที ให้เครื่องอื่นต่อได้
+    // body { host, port } หรือ {} = ปิดทั้งหมด (รับ text/plain จาก navigator.sendBeacon ด้วย)
+    if (req.method === 'POST' && url.pathname === '/disconnect') {
+      const b = await readBody(req);
+      const host = String(b.host || '').trim();
+      const closed = [];
+      const match = (key) => !host || key === `${host}:${Number(b.port)}`;
+      for (const key of [...modbusConns.keys()]) if (match(key) && closeModbusConn(key, 'web page')) closed.push(`modbus ${key}`);
+      for (const key of [...tcpReaders.keys()]) if (match(key) && closeTcpReader(key, 'web page')) closed.push(`tcp ${key}`);
+      return sendJson(res, 200, { success: true, closed });
     }
     return sendJson(res, 404, { success: false, message: 'ไม่พบ endpoint' });
   } catch (err) {

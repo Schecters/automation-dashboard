@@ -86,6 +86,19 @@ const bridgeRead = async (path, body) => {
   return data;
 };
 
+// ปิด connection เครื่องสแกนที่ Bridge ทันที (Keyence รับ client ได้จำกัด ถ้าไม่ปิดเครื่องอื่นต่อไม่ได้)
+// ใช้ keepalive ให้ส่งได้แม้กำลังปิดหน้า — ไม่สำเร็จก็ไม่เป็นไร Bridge ปิดเองเมื่อไม่มีใครใช้
+const bridgeDisconnect = (cfg) => {
+  const port = scannerMode(cfg) === "tcp" ? Number(cfg?.tcp_port) : Number(cfg?.modbus_port ?? 502);
+  const body = JSON.stringify(cfg?.modbus_host ? { host: cfg.modbus_host, port } : {});
+  try {
+    fetch(`${BRIDGE_URL}/disconnect`, { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true })
+      .catch(() => {});
+  } catch {
+    // Bridge ไม่ได้เปิดอยู่
+  }
+};
+
 const SOURCE_LABEL = { TCP: "จาก Keyence (TCP)", Modbus: "จาก Modbus", Scanner: "จาก Scanner" };
 
 const EMPTY_MODBUS_FORM = {
@@ -407,9 +420,16 @@ export default function MesUpdate({ isDarkMode = false }) {
       if (!cancelled) timer = setTimeout(tick, POLL_INTERVAL_MS);
     };
     tick();
+    // ปิดหน้า / รีเฟรช ระหว่าง Lock -> ปล่อยเครื่องสแกนให้เครื่องอื่น
+    const cfgAtStart = modbusCfgRef.current;
+    const onPageHide = () => bridgeDisconnect(cfgAtStart);
+    window.addEventListener("pagehide", onPageHide);
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      window.removeEventListener("pagehide", onPageHide);
+      // Unlock ทั้งหมด / ออกจากระบบ / เปลี่ยนการตั้งค่า -> ปิด connection ทันที
+      bridgeDisconnect(cfgAtStart);
     };
   }, [mesAuth, modbusReady, hasLocked, modbusCfg, processScan]);
 
@@ -560,12 +580,13 @@ export default function MesUpdate({ isDarkMode = false }) {
   const testScannerRequest = (form) =>
     scannerMode(form) === "tcp"
       ? bridgeRead("/tcp/read", { host: form.modbus_host, port: Number(form.tcp_port), after: -1 })
-      : bridgeRead("/modbus/read", { ...form, clear_after_read: false });
+      : bridgeRead("/modbus/read", { ...form, clear_after_read: false, close: true }); // ทดสอบเสร็จปิดทันที
 
   const testModbus = async () => {
     setTestResult({ loading: true });
     try {
       const data = await testScannerRequest(modbusForm);
+      if (scannerMode(modbusForm) === "tcp" && !hasLocked) bridgeDisconnect(modbusForm); // ทดสอบเสร็จปล่อยเครื่องสแกน
       if (scannerMode(modbusForm) === "tcp") {
         const last = data.items?.[data.items.length - 1];
         setTestResult({
