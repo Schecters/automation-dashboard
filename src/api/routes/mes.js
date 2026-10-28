@@ -5,7 +5,7 @@ import { io } from '../lib/realtime.js';
 import { JWT_SECRET } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { recordAuditLog } from '../lib/audit.js';
-import { getLineInfo, getMoList, buildRoutingRow, routingUpdate, MesError } from '../lib/mesClient.js';
+import { getLineInfo, getMoList, buildRoutingRow, routingUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { readScan, validateModbusConfig } from '../lib/modbusReader.js';
 import { findOperatorExams } from './operatorData.js';
 import {
@@ -432,20 +432,23 @@ router.post('/api/mes/stations/:id/update-route', authenticateMesOperator, async
   // "}" เป็นตัวคั่นของ MES -> ตัดออกตั้งแต่ต้น ให้ SN ใน log / การกันซ้ำ ตรงกับที่ส่งไปจริง
   const sn = text(String(req.body?.sn ?? '').replace(/[}\r\n\t]/g, ''), 200);
   if (!sn) return res.status(400).json({ success: false, message: 'ไม่มี Serial Number' });
+  // ผลของชิ้นงาน: ปกติ PASS, กดปุ่ม FAIL ในหน้าเว็บแล้วสแกน = FAIL
+  const result = String(req.body?.result || 'PASS').toUpperCase();
+  if (!ROUTING_RESULTS.includes(result)) return res.status(400).json({ success: false, message: 'ผลต้องเป็น PASS หรือ FAIL' });
 
   try {
     const st = await getStation(id);
     if (!st) return res.status(404).json({ success: false, message: 'ไม่พบ station นี้' });
     if (!st.mo) return res.status(400).json({ success: false, message: 'กรุณาเลือก WO ของ station นี้ก่อน' });
 
-    // กันยิงซ้ำ: SN เดิมที่เพิ่ง update สำเร็จที่ station นี้
+    // กันยิงซ้ำ: SN + ผลเดิม ที่เพิ่ง update สำเร็จที่ station นี้ (PASS แล้วสแกนซ้ำเป็น FAIL ได้)
     const last = await pool.query(
-      `SELECT sn FROM automation_lines.mes_update_logs
+      `SELECT sn, COALESCE(result, 'PASS') AS result FROM automation_lines.mes_update_logs
        WHERE mes_station_id = $1 AND success = TRUE ORDER BY created_at DESC, id DESC LIMIT 1`,
       [id]
     );
-    if (last.rows[0]?.sn === sn) {
-      return res.json({ success: true, skipped: true, message: 'SN นี้ update ไปแล้ว' });
+    if (last.rows[0]?.sn === sn && last.rows[0]?.result === result) {
+      return res.json({ success: true, skipped: true, result, message: `SN นี้ส่ง ${result} ไปแล้ว` });
     }
 
     const row = buildRoutingRow({
@@ -457,31 +460,33 @@ router.post('/api/mes/stations/:id/update-route', authenticateMesOperator, async
       group: st.group_name,
       station: st.station,
       empNo: req.mesOperator.employee_id,
+      result,
     });
 
     let success = false;
     let responseText = '';
     let message = '';
     try {
-      const result = await routingUpdate([row]);
+      const mesRes = await routingUpdate([row]);
       success = true;
-      responseText = result.text;
-      message = 'Update สำเร็จ';
+      responseText = mesRes.text;
+      message = `ส่ง ${result} สำเร็จ`;
     } catch (err) {
       responseText = err.body ? JSON.stringify(err.body) : err.message;
       message = err.message;
     }
 
     const log = await pool.query(
-      `INSERT INTO automation_lines.mes_update_logs (mes_station_id, emp_no, emp_name, line, station, mo, sn, success, mes_response)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [id, req.mesOperator.employee_id, req.mesOperator.name || null, st.line, st.station, st.mo, sn, success,
+      `INSERT INTO automation_lines.mes_update_logs (mes_station_id, emp_no, emp_name, line, station, mo, sn, result, success, mes_response)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [id, req.mesOperator.employee_id, req.mesOperator.name || null, st.line, st.station, st.mo, sn, result, success,
         `${row}\n=> ${responseText}`.slice(0, 4000)]
     );
     io.emit('mes_updated', { station_id: id, success });
 
     res.status(success ? 200 : 502).json({
       success,
+      result,
       message,
       mes_response: responseText,
       log: log.rows[0],
@@ -498,7 +503,7 @@ router.get('/api/mes/logs', authenticateMesOrStaff, async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500);
   try {
     const r = await pool.query(
-      `SELECT l.id, l.mes_station_id, l.emp_no, l.emp_name, l.line, l.station, l.mo, l.sn, l.success,
+      `SELECT l.id, l.mes_station_id, l.emp_no, l.emp_name, l.line, l.station, l.mo, l.sn, COALESCE(l.result, 'PASS') AS result, l.success,
               l.mes_response, l.created_at
        FROM automation_lines.mes_update_logs l
        LEFT JOIN automation_lines.mes_stations s ON s.id = l.mes_station_id

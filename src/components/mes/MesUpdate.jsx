@@ -84,7 +84,9 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
   const [moByLine, setMoByLine] = useState({});
   const [logs, setLogs] = useState([]);
   const [locked, setLocked] = useState(() => new Set(loadJson(MES_LOCKED_KEY, [])));
-  const [runtime, setRuntime] = useState({}); // id -> { sn, status, text, at }
+  const [runtime, setRuntime] = useState({}); // id -> { sn, result, status, text, at }
+  // station ที่กดปุ่ม FAIL ไว้: ชิ้นงานถัดไปที่สแกนจะส่งเป็น FAIL แล้วกลับเป็น PASS อัตโนมัติ
+  const [failArmed, setFailArmed] = useState(() => new Set());
 
   // ตั้งค่า (ME/admin)
   const [terminal, setTerminal] = useState(() => loadJson(MES_TERMINAL_KEY, ""));
@@ -99,13 +101,16 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
 
   const stationsRef = useRef([]);
   const lockedRef = useRef(locked);
+  const failArmedRef = useRef(failArmed);
+  const lastSeenRef = useRef({}); // id -> SN ล่าสุดที่อ่านได้ ("" = register ว่าง / ถูกล้าง)
   const mesAuthRef = useRef(mesAuth);
   // ให้ loop อ่านสแกน / callback เห็นค่าล่าสุด (effect นี้ประกาศก่อน effect อื่น จึงรันก่อน)
   useEffect(() => {
     stationsRef.current = stations;
     lockedRef.current = locked;
+    failArmedRef.current = failArmed;
     mesAuthRef.current = mesAuth;
-  }, [stations, locked, mesAuth]);
+  }, [stations, locked, mesAuth, failArmed]);
 
   const operatorHeaders = useCallback(
     () => ({ "Content-Type": "application/json", Authorization: `Bearer ${mesAuthRef.current?.token || ""}` }),
@@ -278,7 +283,7 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     if (!mesAuth || locked.size === 0) return;
     let cancelled = false;
     let timer = null;
-    const lastSeen = {};
+    const lastSeen = lastSeenRef.current;
 
     const tick = async () => {
       const targets = stationsRef.current.filter((s) => lockedRef.current.has(s.id));
@@ -293,29 +298,46 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
             continue;
           }
           const sn = data.sn;
-          if (!sn || sn === lastSeen[st.id]) {
+          if (!sn) {
+            // register ว่าง (ถูกล้างหลังอ่าน) -> สแกนครั้งถัดไปนับเป็นชิ้นใหม่ แม้ SN เดิม
+            lastSeen[st.id] = "";
+            setStationRuntime(st.id, { connected: true });
+            continue;
+          }
+          if (sn === lastSeen[st.id]) {
             setStationRuntime(st.id, { connected: true });
             continue;
           }
           lastSeen[st.id] = sn;
-          setStationRuntime(st.id, { sn, status: "sending", text: "กำลังส่งไป MES...", connected: true });
+          const result = failArmedRef.current.has(st.id) ? "FAIL" : "PASS";
+          setStationRuntime(st.id, { sn, result, status: "sending", text: `กำลังส่ง ${result} ไป MES...`, connected: true });
 
           const upd = await fetch(`${API_URL}/mes/stations/${st.id}/update-route`, {
             method: "POST",
             headers: operatorHeaders(),
-            body: JSON.stringify({ sn }),
+            body: JSON.stringify({ sn, result }),
           });
           if (await handleOperator401(upd)) return;
-          const result = await upd.json();
+          const out = await upd.json();
           setStationRuntime(st.id, {
             sn,
-            status: result.success ? (result.skipped ? "skipped" : "ok") : "error",
-            text: result.success
-              ? result.message || "Update สำเร็จ"
-              : `${result.message || "Update ไม่สำเร็จ"}${result.mes_response ? ` — ${result.mes_response}` : ""}`,
+            result,
+            status: out.success ? (out.skipped ? "skipped" : "ok") : "error",
+            text: out.success
+              ? out.message || "Update สำเร็จ"
+              : `${out.message || "Update ไม่สำเร็จ"}${out.mes_response ? ` — ${out.mes_response}` : ""}`,
           });
-          // ส่งไม่สำเร็จ ให้ลองใหม่รอบหน้าได้
-          if (!result.success) delete lastSeen[st.id];
+          if (!out.success) {
+            // ส่งไม่สำเร็จ ให้ลองใหม่รอบหน้าได้ (ยังคงโหมด FAIL ไว้)
+            delete lastSeen[st.id];
+          } else if (result === "FAIL") {
+            // ส่ง FAIL แล้ว กลับเป็นโหมด PASS
+            setFailArmed((prev) => {
+              const next = new Set(prev);
+              next.delete(st.id);
+              return next;
+            });
+          }
         } catch (err) {
           setStationRuntime(st.id, { status: "error", text: err.message, connected: false });
         }
@@ -352,7 +374,24 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     setMessage(null);
   };
 
+  // กด FAIL: ชิ้นถัดไปที่สแกนที่ station นี้ส่งเป็น FAIL (กดอีกครั้งเพื่อยกเลิก)
+  const toggleFail = (st) => {
+    setFailArmed((prev) => {
+      const next = new Set(prev);
+      if (next.has(st.id)) next.delete(st.id);
+      else next.add(st.id);
+      return next;
+    });
+  };
+
   const toggleLock = (st) => {
+    if (locked.has(st.id)) {
+      setFailArmed((prev) => {
+        const next = new Set(prev);
+        next.delete(st.id);
+        return next;
+      });
+    }
     if (!locked.has(st.id) && !st.mo) {
       setMessage({ type: "error", text: `กรุณาเลือก WO ของ ${st.label || st.station} ก่อน Lock` });
       return;
@@ -531,6 +570,16 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     </div>
   );
 
+  const resultBadge = (result) => (
+    <span
+      className={`px-2 py-0.5 rounded-md text-[10px] font-black border ${
+        result === "FAIL" ? "border-rose-500 text-rose-500" : "border-emerald-500 text-emerald-500"
+      }`}
+    >
+      {result}
+    </span>
+  );
+
   const statusPill = (rt) => {
     if (!rt?.status) return <span className="text-[11px] text-gray-400">รอสแกน</span>;
     const cls = {
@@ -540,7 +589,12 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
       error: "bg-rose-600 text-white",
     }[rt.status];
     const txt = { ok: "สำเร็จ", skipped: "ซ้ำ", sending: "กำลังส่ง", error: "ผิดพลาด" }[rt.status];
-    return <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${cls}`}>{txt}</span>;
+    return (
+      <>
+        {rt.result && resultBadge(rt.result)}
+        <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${cls}`}>{txt}</span>
+      </>
+    );
   };
 
   // ---------- render: settings ----------
@@ -843,13 +897,14 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
         <div className="space-y-3">
           {stations.map((st, i) => {
             const isLocked = locked.has(st.id);
+            const isFail = isLocked && failArmed.has(st.id);
             const rt = runtime[st.id];
             const mos = moByLine[st.line] || [];
             return (
               <div
                 key={st.id}
                 className={`rounded-2xl border p-4 flex flex-col lg:flex-row lg:items-center gap-3 ${card} ${
-                  isLocked ? "ring-2 ring-emerald-500/60" : ""
+                  isFail ? "ring-2 ring-rose-500" : isLocked ? "ring-2 ring-emerald-500/60" : ""
                 }`}
               >
                 <div className="flex items-center gap-3 lg:w-72 min-w-0">
@@ -884,6 +939,9 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
                 </div>
 
                 <div className="flex-1 min-w-0">
+                  {isFail && (
+                    <div className="text-xs font-black text-rose-500 mb-1">⚠ โหมด FAIL — สแกนชิ้นงานที่เสีย 1 ชิ้น</div>
+                  )}
                   <div className="flex items-center gap-2">
                     {isLocked ? statusPill(rt) : <span className="text-[11px] text-gray-400">ยังไม่ Lock</span>}
                     {rt?.sn && <span className={`text-xs font-mono font-bold truncate ${textMain}`}>{rt.sn}</span>}
@@ -894,6 +952,18 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
                     </div>
                   )}
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => toggleFail(st)}
+                  disabled={!isLocked}
+                  title={isLocked ? "ชิ้นถัดไปที่สแกนจะส่งเป็น FAIL" : "ต้อง Lock ก่อน"}
+                  className={`px-5 py-2.5 rounded-xl text-xs font-black shrink-0 disabled:opacity-30 disabled:cursor-not-allowed ${
+                    isFail ? "bg-rose-600 hover:bg-rose-700 text-white" : "border border-rose-500/60 text-rose-500 hover:bg-rose-500/10"
+                  }`}
+                >
+                  {isFail ? "✕ ยกเลิก FAIL" : "✖ FAIL"}
+                </button>
 
                 <button
                   type="button"
@@ -935,10 +1005,13 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
                   <td className="px-4 py-2">{l.mo}</td>
                   <td className="px-4 py-2 font-mono">{l.sn}</td>
                   <td className="px-4 py-2 whitespace-nowrap">{l.emp_name || l.emp_no}</td>
-                  <td className="px-4 py-2" title={l.mes_response || ""}>
-                    {l.success
-                      ? <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-600 text-white">OK</span>
-                      : <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-rose-600 text-white">FAIL</span>}
+                  <td className="px-4 py-2 whitespace-nowrap" title={l.mes_response || ""}>
+                    <span className="inline-flex items-center gap-1">
+                      {resultBadge(l.result || "PASS")}
+                      {l.success
+                        ? <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-600 text-white">ส่งแล้ว</span>
+                        : <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-rose-600 text-white">ส่งไม่สำเร็จ</span>}
+                    </span>
                   </td>
                 </tr>
               ))}

@@ -4,7 +4,7 @@ import { MES_API_BASE } from './config.js';
 // 🏭 เรียก MES API (http://10.204.212.22:5207)
 //  - lineinfo : [{ LINE_NAME, SECTION_NAME, GROUP_NAME, STATION_NAME }]
 //  - molist   : [{ MO_NUMBER, MODEL_NAME, LINE_NAME }] (พารามิเตอร์ line ของ MES ไม่กรอง ต้องกรองเอง)
-//  - routing-update : { routingData: ["SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS}EMPNO}1"], testData: [] }
+//  - routing-update : { routingData: ["SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1"], testData: [] }
 // ==========================================
 
 const MES_TIMEOUT_MS = 10000;
@@ -59,8 +59,10 @@ export const getMoList = async (empNo, line) => {
 // "}" เป็นตัวคั่นของ MES ห้ามอยู่ในค่า
 const cleanField = (v) => String(v ?? '').replace(/[}\r\n\t]/g, '').trim();
 
-// SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS}EMPNO}1  (ตามตัวอย่างจาก MES)
-export const buildRoutingRow = ({ sn, mo, model, line, section, group, station, empNo }) =>
+export const ROUTING_RESULTS = ['PASS', 'FAIL'];
+
+// SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1  (ตามตัวอย่างจาก MES)
+export const buildRoutingRow = ({ sn, mo, model, line, section, group, station, empNo, result = 'PASS' }) =>
   [
     cleanField(sn),
     cleanField(mo),
@@ -70,7 +72,7 @@ export const buildRoutingRow = ({ sn, mo, model, line, section, group, station, 
     cleanField(group),
     cleanField(station),
     '',
-    'PASS',
+    ROUTING_RESULTS.includes(result) ? result : 'PASS',
     cleanField(empNo),
     '1',
   ].join('}');

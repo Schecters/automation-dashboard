@@ -84,7 +84,7 @@ git push
     ฟังก์ชัน `findOperatorExams` ใน `operatorData.js`, เรียกตรงได้ที่ `/api/operator-exam-check?employee_id=`)
     ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
-    รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS}EMPNO}1` (`buildRoutingRow`)
+    รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1` (`buildRoutingRow`) ปกติ PASS, กดปุ่ม FAIL แล้วสแกน = FAIL
   - อ่าน QR จาก Keyence ผ่าน Modbus TCP (`src/api/lib/modbusReader.js`, package `modbus-serial`) ตั้งค่า IP/register ต่อ station
   - ตาราง `automation_lines.mes_stations`, `automation_lines.mes_update_logs` / แก้ station ได้เฉพาะ ME, admin
   - แต่ละเครื่องมีชุด station ของตัวเอง: คอลัมน์ `mes_stations.terminal` = ชื่อเครื่องที่เก็บใน localStorage `mesTerminal`

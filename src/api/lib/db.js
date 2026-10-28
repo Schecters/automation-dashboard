@@ -192,6 +192,8 @@ const migrateMes = async () => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    // ผลที่ส่งไป MES (PASS / FAIL)
+    await pool.query(`ALTER TABLE automation_lines.mes_update_logs ADD COLUMN IF NOT EXISTS result VARCHAR(10);`);
     // แต่ละเครื่อง (terminal) มีชุด station / line ของตัวเอง
     await pool.query(`ALTER TABLE automation_lines.mes_stations ADD COLUMN IF NOT EXISTS terminal VARCHAR(100) NOT NULL DEFAULT 'default';`);
     await pool.query(`
