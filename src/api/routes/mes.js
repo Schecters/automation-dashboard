@@ -1,7 +1,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { io } from '../lib/realtime.js';
-import { JWT_SECRET } from '../lib/config.js';
+import { JWT_SECRET, MES_QUERY_EMP_NO } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs } from '../lib/mesLog.js';
@@ -116,17 +116,18 @@ const MOLIST_TTL_MS = 60 * 1000;
 const lineInfoCache = new Map(); // line -> { at, rows }
 let moListCache = null; // { at, rows }
 
-const cachedLineInfo = async (empNo, line) => {
+// ดู Line / Station / WO จาก MES ด้วยรหัสกลาง MES_QUERY_EMP_NO เสมอ
+const cachedLineInfo = async (line) => {
   const hit = lineInfoCache.get(line);
   if (hit && Date.now() - hit.at < LINEINFO_TTL_MS) return hit.rows;
-  const rows = await getLineInfo(empNo, line);
+  const rows = await getLineInfo(MES_QUERY_EMP_NO, line);
   lineInfoCache.set(line, { at: Date.now(), rows });
   return rows;
 };
 
-const cachedMoList = async (empNo, line, { fresh = false } = {}) => {
+const cachedMoList = async (line, { fresh = false } = {}) => {
   if (fresh || !moListCache || Date.now() - moListCache.at >= MOLIST_TTL_MS) {
-    moListCache = { at: Date.now(), rows: await getMoList(empNo) };
+    moListCache = { at: Date.now(), rows: await getMoList(MES_QUERY_EMP_NO) };
   }
   return moListCache.rows.filter((r) => String(r.LINE_NAME) === String(line));
 };
@@ -134,7 +135,7 @@ const cachedMoList = async (empNo, line, { fresh = false } = {}) => {
 router.get('/api/mes/lineinfo', authenticateMesOrStaff, async (req, res) => {
   const line = req.query.line ? String(req.query.line).trim() : 'ALL';
   try {
-    const rows = await getLineInfo(req.mesEmpNo, line);
+    const rows = await getLineInfo(MES_QUERY_EMP_NO, line);
     res.json({
       success: true,
       data: rows.map((r) => ({ line: r.LINE_NAME, section: r.SECTION_NAME, group: r.GROUP_NAME, station: r.STATION_NAME })),
@@ -148,7 +149,7 @@ router.get('/api/mes/molist', authenticateMesOrStaff, async (req, res) => {
   const line = String(req.query.line || '').trim();
   if (!line) return res.status(400).json({ success: false, message: 'กรุณาระบุ Line' });
   try {
-    const rows = await cachedMoList(req.mesEmpNo, line, { fresh: true });
+    const rows = await cachedMoList(line, { fresh: true });
     res.json({ success: true, data: rows.map((r) => ({ mo: r.MO_NUMBER, model: r.MODEL_NAME, line: r.LINE_NAME })) });
   } catch (err) {
     sendMesError(res, err, 'ดึงรายการ WO จาก MES ไม่สำเร็จ');
@@ -184,12 +185,12 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
   try {
     // ยืนยัน Station / WO กับ MES และใช้ SECTION / GROUP / MODEL จาก MES (ไม่เชื่อค่าจากหน้าเว็บ)
     const empNo = req.mesOperator.employee_id;
-    const st = (await cachedLineInfo(empNo, line)).find(
+    const st = (await cachedLineInfo(line)).find(
       (r) => r.STATION_NAME === stationName && (!req.body?.group || r.GROUP_NAME === req.body.group)
     );
     if (!st) return res.status(400).json({ success: false, message: `ไม่พบ Station ${stationName} ของ Line ${line} ใน MES` });
-    let moRow = (await cachedMoList(empNo, line)).find((r) => String(r.MO_NUMBER) === mo);
-    if (!moRow) moRow = (await cachedMoList(empNo, line, { fresh: true })).find((r) => String(r.MO_NUMBER) === mo);
+    let moRow = (await cachedMoList(line)).find((r) => String(r.MO_NUMBER) === mo);
+    if (!moRow) moRow = (await cachedMoList(line, { fresh: true })).find((r) => String(r.MO_NUMBER) === mo);
     if (!moRow) return res.status(400).json({ success: false, message: `ไม่พบ WO ${mo} ของ Line ${line} ใน MES` });
 
     const row = buildRoutingRow({
