@@ -27,7 +27,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 
 const CONFIG_FILE = path.join(__dirname, 'mes-bridge.config.json');
 let fileConfig = {};
@@ -518,6 +518,15 @@ const peerServer = SHARE_TO.length
     })
   : null;
 
+// error ที่ไม่ได้คาดไว้: บันทึกสาเหตุให้เห็นในหน้าต่างก่อนปิด (start-mes-bridge.bat จะเปิดใหม่เอง)
+process.on('uncaughtException', (err) => {
+  console.error(`${new Date().toLocaleString('sv-SE')} [ERROR] MES Bridge crashed: ${err.stack || err.message}`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (err) => {
+  console.error(`${new Date().toLocaleString('sv-SE')} [ERROR] Unhandled: ${err?.stack || err}`);
+});
+
 const exitOnListenError = (port) => (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`[ERROR] Port ${port} is already in use (MES Bridge already running?)`);
@@ -585,10 +594,16 @@ if (RELAY_SCANNER) {
       // คำสั่งจาก application ส่งต่อไปที่ Keyence
       if (reader.socket && reader.connected) reader.socket.write(chunk);
     });
-    sock.on('error', () => {});
+    let lastError = '';
+    sock.on('error', (err) => {
+      lastError = err.message;
+    });
+    sock.on('end', () => {
+      lastError = lastError || 'closed by the application';
+    });
     sock.on('close', () => {
       relayClients.delete(sock);
-      log(`[INFO] Relay client disconnected ${ip} (${relayClients.size} connected)`);
+      log(`[INFO] Relay client disconnected ${ip}: ${lastError || 'connection closed'} (${relayClients.size} connected)`);
     });
   });
   relayServer.on('error', exitOnListenError(RELAY_PORT));
