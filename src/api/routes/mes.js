@@ -165,8 +165,9 @@ router.get('/api/mes/molist', authenticateMesOrStaff, async (req, res) => {
 const lastSent = new Map(); // `${line}|${station}` -> { sn, result } กันส่งซ้ำ
 
 router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) => {
-  // SN = ส่วนแรกก่อนช่องว่าง (Keyence ต่อท้ายผลอ่านด้วยข้อมูลอื่น เช่น " Y")
-  const sn = text(String(req.body?.sn ?? '').replace(/[}\r\n\t]/g, ' ').trim().split(/\s+/)[0], 200);
+  // SN ส่งตามที่สแกนได้ทั้งหมด (บาง model มีช่องว่างใน SN เช่น "... Y" ห้ามตัด)
+  // ตัดแค่ Enter/บรรทัดใหม่ท้ายผลอ่าน และ "}" ที่เป็นตัวคั่นของ MES
+  const sn = text(String(req.body?.sn ?? '').replace(/[}\r\n]/g, '').trim(), 200);
   const result = String(req.body?.result || 'PASS').toUpperCase();
   const line = text(req.body?.line, 100);
   const stationName = text(req.body?.station, 100);
