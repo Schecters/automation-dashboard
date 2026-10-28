@@ -69,6 +69,9 @@ const sendMesError = (res, err, fallback) => {
   return res.status(500).json({ success: false, message: fallback });
 };
 
+// route ของ ME/admin: แสดงสาเหตุจริงให้เห็นในหน้าเว็บ (คนตั้งค่าแก้ปัญหาเองได้ เช่น ตาราง/คอลัมน์ยังไม่ถูกสร้าง)
+const staffErrorMessage = (msg, err) => `${msg}: ${err?.message || err}`;
+
 const auditStaff = (req, action, target, details) =>
   recordAuditLog({
     employeeId: req.user.employee_id,
@@ -283,7 +286,7 @@ router.post('/api/mes/stations', ...requireStaff, async (req, res) => {
     res.json({ success: true, data: row });
   } catch (err) {
     console.error('Create MES Station Error:', err);
-    res.status(500).json({ success: false, message: 'เพิ่ม station ไม่สำเร็จ' });
+    res.status(500).json({ success: false, message: staffErrorMessage('เพิ่ม station ไม่สำเร็จ', err) });
   }
 });
 
@@ -303,7 +306,7 @@ router.put('/api/mes/stations/order', ...requireStaff, async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Order MES Stations Error:', err);
-    res.status(500).json({ success: false, message: 'บันทึกลำดับไม่สำเร็จ' });
+    res.status(500).json({ success: false, message: staffErrorMessage('บันทึกลำดับไม่สำเร็จ', err) });
   } finally {
     client.release();
   }
@@ -338,7 +341,7 @@ router.put('/api/mes/stations/:id', ...requireStaff, async (req, res) => {
     res.json({ success: true, data: row });
   } catch (err) {
     console.error('Update MES Station Error:', err);
-    res.status(500).json({ success: false, message: 'แก้ไข station ไม่สำเร็จ' });
+    res.status(500).json({ success: false, message: staffErrorMessage('แก้ไข station ไม่สำเร็จ', err) });
   }
 });
 
@@ -356,7 +359,7 @@ router.delete('/api/mes/stations/:id', ...requireStaff, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Delete MES Station Error:', err);
-    res.status(500).json({ success: false, message: 'ลบ station ไม่สำเร็จ' });
+    res.status(500).json({ success: false, message: staffErrorMessage('ลบ station ไม่สำเร็จ', err) });
   }
 });
 
