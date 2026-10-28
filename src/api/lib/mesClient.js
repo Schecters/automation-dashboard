@@ -4,7 +4,8 @@ import { MES_API_BASE } from './config.js';
 // 🏭 เรียก MES API (http://10.204.212.22:5207)
 //  - lineinfo : [{ LINE_NAME, SECTION_NAME, GROUP_NAME, STATION_NAME }]
 //  - molist   : [{ MO_NUMBER, MODEL_NAME, LINE_NAME }] (พารามิเตอร์ line ของ MES ไม่กรอง ต้องกรองเอง)
-//  - routing-update : { routingData: ["SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1"], testData: [] }
+//  - routing-update : POST /api/mes/tdc/typed/routing-update
+//                     { routingData: ["SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1"], testData: [] }
 // ==========================================
 
 const MES_TIMEOUT_MS = 10000;
@@ -30,7 +31,9 @@ const mesFetch = async (pathAndQuery, options = {}) => {
       // MES ตอบเป็นข้อความธรรมดา
     }
     if (!res.ok) {
-      const msg = (body && typeof body === 'object' && body.message) || `MES ตอบกลับ HTTP ${res.status}`;
+      // MES ตอบ error เป็น { message } หรือข้อความธรรมดา (เช่น "routingData is required")
+      const detail = body && typeof body === 'object' ? body.message : typeof body === 'string' ? body.trim().slice(0, 300) : '';
+      const msg = detail ? `MES ตอบกลับ HTTP ${res.status}: ${detail}` : `MES ตอบกลับ HTTP ${res.status}`;
       throw new MesError(msg, res.status, body);
     }
     return { status: res.status, body, text };
@@ -79,7 +82,8 @@ export const buildRoutingRow = ({ sn, mo, model, line, section, group, station, 
 
 export const routingUpdate = async (rows) => {
   const payload = { routingData: rows, testData: [] };
-  const result = await mesFetch('/api/mes//tdc/typed/routing-update', {
+  // path ต้องมี / เดียว (แบบ //tdc ได้ 404)
+  const result = await mesFetch('/api/mes/tdc/typed/routing-update', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
