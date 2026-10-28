@@ -289,7 +289,8 @@ export default function MesUpdate({ isDarkMode = false }) {
 
   const processScan = useCallback(
     async (rawSn, source) => {
-      const sn = String(rawSn || "").replace(/[}\r\n\t]/g, "").trim();
+      // Keyence ต่อท้ายผลอ่านด้วยข้อมูลอื่นหลังช่องว่าง (เช่น "... Y") -> SN = ส่วนแรกก่อนช่องว่าง
+      const sn = String(rawSn || "").replace(/[}\r\n\t]/g, " ").trim().split(/\s+/)[0] || "";
       if (!sn || sendingRef.current) return false;
       const targets = stationsRef.current.filter((s) => lockedRef.current.has(s.id));
       if (targets.length === 0) {
