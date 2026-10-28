@@ -27,7 +27,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 const CONFIG_FILE = path.join(__dirname, 'mes-bridge.config.json');
 let fileConfig = {};
@@ -47,6 +47,12 @@ const ALLOWED_ORIGINS = listOf(process.env.MES_BRIDGE_ORIGINS || fileConfig.orig
 const SHARE_TO = listOf(process.env.MES_BRIDGE_SHARE_TO || fileConfig.shareTo);
 const PEER_PORT = Number(process.env.MES_BRIDGE_PEER_PORT || fileConfig.peerPort || 18081);
 const UPSTREAM = String(process.env.MES_BRIDGE_UPSTREAM || fileConfig.upstream || '').trim();
+// relay: เครื่องนี้ต่อ Keyence (TCP data port) ค้างไว้ แล้วทำตัวเป็น Keyence ให้ application เครื่องอื่นต่อแทน
+//  "relay": { "scanner": "192.168.1.49:9004", "listenPort": 9004, "allow": ["192.168.1.92"] }
+const RELAY = fileConfig.relay || {};
+const RELAY_SCANNER = String(process.env.MES_BRIDGE_RELAY_SCANNER || RELAY.scanner || '').trim();
+const RELAY_ALLOW = listOf(process.env.MES_BRIDGE_RELAY_ALLOW || RELAY.allow);
+const RELAY_PORT = Number(process.env.MES_BRIDGE_RELAY_PORT || RELAY.listenPort || RELAY_SCANNER.split(':')[1] || 9004);
 
 const log = (...args) => console.log(new Date().toLocaleString('sv-SE'), ...args);
 
@@ -68,9 +74,11 @@ const TCP_IDLE_CLOSE_MS = 15 * 1000; // หน้าเว็บเลิกถ�
 const TCP_CONNECT_TIMEOUT_MS = 3000;
 const tcpReaders = new Map();
 
-const createTcpReader = (host, port) => {
+// persistent = ต่อค้างตลอด ไม่ปิดเมื่อหน้าเว็บเลิกใช้ (ใช้กับ relay ที่ application เครื่องอื่นต่ออยู่)
+// onRaw = รับข้อมูลดิบจากเครื่องสแกนทุก byte (relay ส่งต่อให้ application ตามเดิมทุกตัวอักษร)
+const createTcpReader = (host, port, { persistent = false, onRaw = null } = {}) => {
   const r = { host, port, socket: null, connected: false, lastError: null, readError: null, buffer: '',
-    seq: 0, items: [], lastPollAt: Date.now(), timer: null, closed: false };
+    seq: 0, items: [], lastPollAt: Date.now(), timer: null, closed: false, persistent };
 
   const connect = () => {
     if (r.closed) return;
@@ -88,6 +96,7 @@ const createTcpReader = (host, port) => {
       if (!r.connected) socket.destroy(new Error('เชื่อมต่อไม่ทันเวลา'));
     });
     socket.on('data', (chunk) => {
+      if (onRaw) onRaw(chunk);
       r.buffer += chunk.toString('latin1');
       const parts = r.buffer.split(/\r\n|\r|\n/);
       r.buffer = parts.pop();
@@ -127,7 +136,7 @@ const createTcpReader = (host, port) => {
 
 const closeTcpReader = (key, reason) => {
   const r = tcpReaders.get(key);
-  if (!r) return false;
+  if (!r || r.persistent) return false; // relay ต้องต่อค้างไว้ให้ application
   r.close();
   tcpReaders.delete(key);
   log(`[INFO] TCP ${key} disconnected (${reason})`);
@@ -136,7 +145,7 @@ const closeTcpReader = (key, reason) => {
 
 setInterval(() => {
   for (const [key, r] of tcpReaders) {
-    if (Date.now() - r.lastPollAt > TCP_IDLE_CLOSE_MS) closeTcpReader(key, 'idle');
+    if (!r.persistent && Date.now() - r.lastPollAt > TCP_IDLE_CLOSE_MS) closeTcpReader(key, 'idle');
   }
 }, 5000).unref();
 
@@ -531,5 +540,61 @@ if (peerServer) {
   peerServer.listen(PEER_PORT, '0.0.0.0', () => {
     log(`[OK] Sharing scanner to other PCs on port ${PEER_PORT}: ${SHARE_TO.join(', ')}`);
     log('     (Windows Firewall must allow inbound TCP port ' + PEER_PORT + ')');
+  });
+}
+
+// ------------------------------------------
+// Relay: ต่อ Keyence (TCP data port) จากเครื่องนี้ครั้งเดียว แล้วเปิด port ให้ application เครื่องอื่นต่อเหมือนต่อ Keyence
+//  - ข้อมูลจาก Keyence ส่งต่อให้ทุก application ตามเดิมทุก byte และหน้าเว็บบนเครื่องนี้ก็ได้ค่าเดียวกัน
+//  - ข้อมูลจาก application (เช่นคำสั่ง) ส่งต่อไปที่ Keyence
+//  - รับเฉพาะ IP ใน allow
+// ------------------------------------------
+if (RELAY_SCANNER) {
+  const [scanHost, scanPortText] = RELAY_SCANNER.split(':');
+  const scanPort = Number(scanPortText || 9004);
+  if (!isPrivateIPv4(scanHost) || !validPort(scanPort)) {
+    console.error(`[ERROR] relay.scanner must be "IP:port" of the scanner (got "${RELAY_SCANNER}")`);
+    process.exit(1);
+  }
+  if (!RELAY_ALLOW.length) {
+    console.error('[ERROR] relay.allow is empty: list the IP of each PC whose application connects to this relay');
+    process.exit(1);
+  }
+
+  const relayClients = new Set();
+  const key = `${scanHost}:${scanPort}`;
+  const reader = createTcpReader(scanHost, scanPort, {
+    persistent: true,
+    onRaw: (chunk) => {
+      for (const c of relayClients) if (!c.destroyed) c.write(chunk);
+    },
+  });
+  tcpReaders.set(key, reader); // หน้าเว็บบนเครื่องนี้ที่ตั้งเครื่องสแกนเดียวกัน ใช้ connection นี้ร่วม
+
+  const relayServer = net.createServer((sock) => {
+    const ip = String(sock.remoteAddress || '').replace(/^::ffff:/, '');
+    if (!RELAY_ALLOW.includes(ip)) {
+      log(`[WARN] Relay rejected ${ip} (not in relay.allow)`);
+      sock.destroy();
+      return;
+    }
+    relayClients.add(sock);
+    log(`[OK] Relay client connected ${ip} (${relayClients.size} connected)`);
+    sock.setKeepAlive(true, 10000);
+    sock.on('data', (chunk) => {
+      // คำสั่งจาก application ส่งต่อไปที่ Keyence
+      if (reader.socket && reader.connected) reader.socket.write(chunk);
+    });
+    sock.on('error', () => {});
+    sock.on('close', () => {
+      relayClients.delete(sock);
+      log(`[INFO] Relay client disconnected ${ip} (${relayClients.size} connected)`);
+    });
+  });
+  relayServer.on('error', exitOnListenError(RELAY_PORT));
+  relayServer.listen(RELAY_PORT, '0.0.0.0', () => {
+    log(`[OK] Relay: scanner ${key} -> port ${RELAY_PORT} for ${RELAY_ALLOW.join(', ')}`);
+    log(`     Set the application on those PCs to connect to THIS PC's IP, port ${RELAY_PORT}`);
+    log(`     (Windows Firewall must allow inbound TCP port ${RELAY_PORT})`);
   });
 }
