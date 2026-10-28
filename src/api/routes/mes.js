@@ -5,6 +5,7 @@ import { JWT_SECRET } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { readScan, validateModbusConfig } from '../lib/modbusReader.js';
+import { pollTcpScans } from '../lib/tcpScanReader.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs } from '../lib/mesLog.js';
 import { findOperatorExams } from './operatorData.js';
 import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
@@ -195,6 +196,32 @@ router.post('/api/mes/modbus/read', authenticateMesOrStaff, async (req, res) => 
     res.json({ success: true, sn, raw });
   } catch (err) {
     res.status(502).json({ success: false, message: `อ่าน Modbus ไม่ได้: ${err.message}` });
+  }
+});
+
+// ------------------------------------------
+// รับค่าจากเครื่องสแกนผ่าน TCP data port (Keyence ส่งผลอ่านมาเอง เช่น port 9004)
+// body { host, port, after } -> { connected, error, seq, items: [{ seq, sn, at }] }
+// ------------------------------------------
+router.post('/api/mes/tcp/read', authenticateMesOrStaff, async (req, res) => {
+  const host = text(req.body?.host, 100);
+  const port = Number(req.body?.port ?? 9004);
+  const after = req.body?.after === null || req.body?.after === undefined ? null : Number(req.body.after);
+  if (!host || !isPrivateIPv4(host)) {
+    return res.status(400).json({ success: false, message: 'IP เครื่องสแกนต้องเป็น IP ภายใน (10.x / 172.16-31.x / 192.168.x)' });
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return res.status(400).json({ success: false, message: 'Port ไม่ถูกต้อง' });
+  }
+  if (after !== null && !Number.isInteger(after)) return res.status(400).json({ success: false, message: 'after ไม่ถูกต้อง' });
+  try {
+    const r = await pollTcpScans({ host, port, after });
+    if (!r.connected) {
+      return res.status(502).json({ success: false, message: `เชื่อมต่อเครื่องสแกน ${host}:${port} ไม่ได้${r.error ? `: ${r.error}` : ''}` });
+    }
+    res.json({ success: true, ...r });
+  } catch (err) {
+    res.status(502).json({ success: false, message: `อ่านเครื่องสแกนไม่ได้: ${err.message}` });
   }
 });
 

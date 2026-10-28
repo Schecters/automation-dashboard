@@ -86,7 +86,9 @@ git push
     ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
     รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1` (`buildRoutingRow`) ปกติ PASS, กดปุ่ม FAIL แล้วสแกน = FAIL
-  - อ่าน QR จาก Keyence ผ่าน Modbus TCP (`src/api/lib/modbusReader.js`, package `modbus-serial`) ตั้งครั้งเดียวต่อเครื่อง (IP ภายในเท่านั้น)
+  - รับ QR จาก Keyence ตั้งครั้งเดียวต่อเครื่อง (IP ภายในเท่านั้น) 2 แบบ:
+    TCP data port เช่น 9004 (`src/api/lib/tcpScanReader.js` ต่อค้าง 1 connection/เครื่องสแกน, ใช้กับ SR series ที่ Modbus ต่อไม่ได้)
+    หรือ Modbus TCP (`src/api/lib/modbusReader.js`, package `modbus-serial`)
     สแกน 1 ครั้ง → ส่งให้ทุก station ที่ Lock ตามลำดับบนลงล่าง (หยุดเมื่อ station ใดไม่สำเร็จ หรือส่ง FAIL แล้ว)
   - การตั้งค่าของแต่ละเครื่อง เก็บในเบราว์เซอร์เครื่องนั้น: `mesTerminal` (ชื่อเครื่อง), `mesModbus`, `mesStations`
     แก้ได้เฉพาะ ME, admin (หน้าตั้งค่าต้อง login) / ล้างข้อมูลเบราว์เซอร์ = ต้องตั้งค่าใหม่

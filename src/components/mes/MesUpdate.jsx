@@ -62,7 +62,14 @@ const formatTime = (v) =>
     : "-";
 
 const EMPTY_STATION_FORM = { id: null, label: "", line: "", section_name: "", group_name: "", station: "" };
+// การเชื่อมต่อเครื่องสแกน: mode "tcp" = Keyence ส่งผลอ่านมาทาง TCP data port, "modbus" = อ่าน register
+// (ค่าที่บันทึกไว้รุ่นก่อนไม่มี mode = modbus)
+const scannerMode = (cfg) => cfg?.mode || "modbus";
+const SOURCE_LABEL = { TCP: "จาก Keyence (TCP)", Modbus: "จาก Modbus", Scanner: "จาก Scanner" };
+
 const EMPTY_MODBUS_FORM = {
+  mode: "tcp",
+  tcp_port: 9004,
   modbus_host: "",
   modbus_port: 502,
   unit_id: 1,
@@ -111,6 +118,7 @@ export default function MesUpdate({ isDarkMode = false }) {
   const mesAuthRef = useRef(mesAuth);
   const sendingRef = useRef(false);
   const lastSeenRef = useRef(""); // SN ล่าสุดที่อ่านจาก Modbus ("" = register ว่าง / ถูกล้าง)
+  const tcpAfterRef = useRef(null); // seq ล่าสุดที่รับจาก TCP data port แล้ว (null = เพิ่งเริ่ม)
   const manualRef = useRef(null);
   const terminalRef = useRef(terminal);
   const modbusCfgRef = useRef(modbusCfg);
@@ -325,17 +333,49 @@ export default function MesUpdate({ isDarkMode = false }) {
     [operatorHeaders, handleOperator401]
   );
 
-  // อ่านเครื่องสแกนผ่าน Modbus (ครั้งเดียวต่อรอบ ไม่ใช่ต่อ station)
+  // อ่านเครื่องสแกน (ครั้งเดียวต่อรอบ ไม่ใช่ต่อ station)
   const modbusReady = Boolean(modbusCfg?.modbus_host);
   const hasLocked = locked.size > 0;
   useEffect(() => {
     if (!mesAuth || !modbusReady || !hasLocked) return;
     let cancelled = false;
     let timer = null;
+    tcpAfterRef.current = null; // เริ่มใหม่: ไม่ส่งค่าที่สแกนไว้ก่อน Lock
+
+    // TCP data port: รับทุกครั้งที่สแกน (ชิ้นเดิมซ้ำก็นับ) ตามลำดับ
+    const tickTcp = async () => {
+      const cfg = modbusCfgRef.current;
+      const res = await fetch(`${API_URL}/mes/tcp/read`, {
+        method: "POST",
+        headers: operatorHeaders(),
+        body: JSON.stringify({ host: cfg.modbus_host, port: cfg.tcp_port, after: tcpAfterRef.current }),
+      });
+      if (await handleOperator401(res)) return false;
+      const data = await res.json();
+      if (cancelled) return false;
+      if (!data.success) {
+        setModbusStatus({ ok: false, text: data.message });
+        return true;
+      }
+      setModbusStatus({ ok: !data.error, text: data.error || "เชื่อมต่อแล้ว" });
+      if (tcpAfterRef.current === null) {
+        tcpAfterRef.current = data.seq;
+        return true;
+      }
+      for (const item of data.items) {
+        if (cancelled) return false;
+        tcpAfterRef.current = item.seq;
+        await processScan(item.sn, "TCP");
+      }
+      if (data.items.length === 0 && data.seq < tcpAfterRef.current) tcpAfterRef.current = data.seq; // server เริ่มนับใหม่
+      return true;
+    };
 
     const tick = async () => {
       try {
-        if (!sendingRef.current) {
+        if (!sendingRef.current && scannerMode(modbusCfgRef.current) === "tcp") {
+          if (!(await tickTcp())) return;
+        } else if (!sendingRef.current) {
           const res = await fetch(`${API_URL}/mes/modbus/read`, {
             method: "POST",
             headers: operatorHeaders(),
@@ -368,7 +408,7 @@ export default function MesUpdate({ isDarkMode = false }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [mesAuth, modbusReady, hasLocked, operatorHeaders, handleOperator401, processScan]);
+  }, [mesAuth, modbusReady, hasLocked, modbusCfg, operatorHeaders, handleOperator401, processScan]);
 
   // ---------- operator actions ----------
   const applyOperatorAuth = (auth) => {
@@ -501,13 +541,13 @@ export default function MesUpdate({ isDarkMode = false }) {
     e.preventDefault();
     setSaving(true);
     try {
-      // ทดลองอ่านก่อนบันทึก (ตรวจ IP / register ที่ server)
-      await staffFetch(`${API_URL}/mes/modbus/read`, { method: "POST", body: JSON.stringify(modbusForm) });
+      // ทดลองเชื่อมต่อก่อนบันทึก (ตรวจ IP / port / register ที่ server)
+      await testScannerRequest(modbusForm);
       const cfg = { ...modbusForm };
       saveJson(MES_MODBUS_KEY, cfg);
       setModbusCfg(cfg);
       lastSeenRef.current = "";
-      setMessage({ type: "ok", text: "บันทึกการเชื่อมต่อ Modbus ของเครื่องนี้แล้ว" });
+      setMessage({ type: "ok", text: "บันทึกการเชื่อมต่อเครื่องสแกนของเครื่องนี้แล้ว" });
     } catch (err) {
       setMessage({ type: "error", text: `ยังไม่บันทึก — ${err.message}` });
     } finally {
@@ -516,18 +556,37 @@ export default function MesUpdate({ isDarkMode = false }) {
   };
 
   const disableModbus = () => {
-    if (!window.confirm("ไม่ใช้ Modbus กับเครื่องนี้? (สแกนด้วย scanner ลงช่องในหน้าเว็บแทน)")) return;
+    if (!window.confirm("ไม่เชื่อมต่อเครื่องสแกนกับเครื่องนี้? (สแกนด้วย scanner ลงช่องในหน้าเว็บแทน)")) return;
     saveJson(MES_MODBUS_KEY, null);
     setModbusCfg(null);
     setModbusForm(EMPTY_MODBUS_FORM);
-    setMessage({ type: "ok", text: "ปิดการใช้ Modbus ของเครื่องนี้แล้ว" });
+    setMessage({ type: "ok", text: "ปิดการเชื่อมต่อเครื่องสแกนของเครื่องนี้แล้ว" });
   };
+
+  // TCP: after -1 = ขอค่าที่เคยได้รับทั้งหมด (ดูค่าล่าสุด) / Modbus: อ่าน register ตอนนี้
+  const testScannerRequest = (form) =>
+    scannerMode(form) === "tcp"
+      ? staffFetch(`${API_URL}/mes/tcp/read`, {
+          method: "POST",
+          body: JSON.stringify({ host: form.modbus_host, port: form.tcp_port, after: -1 }),
+        })
+      : staffFetch(`${API_URL}/mes/modbus/read`, { method: "POST", body: JSON.stringify(form) });
 
   const testModbus = async () => {
     setTestResult({ loading: true });
     try {
-      const data = await staffFetch(`${API_URL}/mes/modbus/read`, { method: "POST", body: JSON.stringify(modbusForm) });
-      setTestResult({ ok: true, text: data.sn || "(ว่าง — ยังไม่มีค่าสแกน)", raw: data.raw });
+      const data = await testScannerRequest(modbusForm);
+      if (scannerMode(modbusForm) === "tcp") {
+        const last = data.items?.[data.items.length - 1];
+        setTestResult({
+          ok: true,
+          text: last
+            ? `เชื่อมต่อได้ — ค่าล่าสุดที่สแกน: ${last.sn}`
+            : "เชื่อมต่อได้ — ยังไม่มีการสแกน (ลองสแกน 1 ครั้งแล้วกดทดสอบอีกครั้ง)",
+        });
+      } else {
+        setTestResult({ ok: true, text: data.sn || "(ว่าง — ยังไม่มีค่าสแกน)", raw: data.raw });
+      }
     } catch (err) {
       setTestResult({ ok: false, text: err.message });
     }
@@ -580,6 +639,12 @@ export default function MesUpdate({ isDarkMode = false }) {
       return next;
     });
   };
+
+  const scannerAddr = modbusCfg
+    ? scannerMode(modbusCfg) === "tcp"
+      ? `TCP ${modbusCfg.modbus_host}:${modbusCfg.tcp_port}`
+      : `Modbus ${modbusCfg.modbus_host}:${modbusCfg.modbus_port}`
+    : "";
 
   // ---------- styles ----------
   const card = isDarkMode ? "bg-[#1E293B] border-slate-700/60" : "bg-white border-gray-200";
@@ -694,12 +759,45 @@ export default function MesUpdate({ isDarkMode = false }) {
         {/* 2) Modbus ของเครื่อง (ตั้งครั้งเดียว) */}
         <form onSubmit={saveModbus} className={`rounded-2xl border p-4 space-y-3 ${card}`}>
           <div className={`text-sm font-bold ${textMain}`}>
-            2. การเชื่อมต่อเครื่องสแกน (Modbus TCP) ของเครื่องนี้{" "}
+            2. การเชื่อมต่อเครื่องสแกน Keyence ของเครื่องนี้{" "}
             {modbusCfg
-              ? <span className="text-emerald-500">— ใช้งานอยู่ {modbusCfg.modbus_host}:{modbusCfg.modbus_port}</span>
+              ? <span className="text-emerald-500">
+                  — ใช้งานอยู่ {scannerMode(modbusCfg) === "tcp" ? `TCP ${modbusCfg.modbus_host}:${modbusCfg.tcp_port}` : `Modbus ${modbusCfg.modbus_host}:${modbusCfg.modbus_port}`}
+                </span>
               : <span className="text-gray-400">— ยังไม่ได้ตั้ง (ใช้สแกนลงช่องในหน้าเว็บได้)</span>}
           </div>
           <p className="text-[11px] text-gray-400">ตั้งครั้งเดียว ใช้กับทุก station ของเครื่องนี้ — สแกน 1 ครั้งส่งให้ทุก station ที่ Lock ตามลำดับ</p>
+          <div className="flex flex-wrap gap-2">
+            {[
+              ["tcp", "TCP data port (แนะนำ)"],
+              ["modbus", "Modbus TCP"],
+            ].map(([key, text]) => (
+              <button key={key} type="button"
+                onClick={() => { setModbusForm({ ...modbusForm, mode: key }); setTestResult(null); }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${scannerMode(modbusForm) === key
+                  ? "bg-blue-600 border-blue-600 text-white" : "border-gray-400/40 text-gray-400"}`}>
+                {text}
+              </button>
+            ))}
+          </div>
+          {scannerMode(modbusForm) === "tcp" && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="col-span-2">
+                <label className={label}>IP เครื่องสแกน</label>
+                <input className={`${input} w-full`} value={modbusForm.modbus_host} required placeholder="192.168.0.10"
+                  onChange={(e) => setModbusForm({ ...modbusForm, modbus_host: e.target.value })} />
+              </div>
+              <div>
+                <label className={label}>Data port</label>
+                <input type="number" className={`${input} w-full`} value={modbusForm.tcp_port ?? 9004}
+                  onChange={(e) => setModbusForm({ ...modbusForm, tcp_port: e.target.value })} />
+              </div>
+              <p className="col-span-2 sm:col-span-4 text-[11px] text-gray-400">
+                เครื่องสแกนส่งผลอ่านมาเองทุกครั้งที่สแกน (สแกนชิ้นเดิมซ้ำก็ส่ง) ไม่ต้องตั้ง register
+              </p>
+            </div>
+          )}
+          {scannerMode(modbusForm) === "modbus" && (<>
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
             <div className="col-span-2">
               <label className={label}>IP เครื่องสแกน</label>
@@ -748,6 +846,7 @@ export default function MesUpdate({ isDarkMode = false }) {
               onChange={(e) => setModbusForm({ ...modbusForm, clear_after_read: e.target.checked })} />
             อ่านแล้วล้าง register เป็น 0 (Holding เท่านั้น — สแกนชิ้นเดิมซ้ำได้ เช่น ส่ง FAIL หลัง PASS)
           </label>
+          </>)}
           {testResult && (
             <div className={`text-xs p-2 rounded-lg border ${testResult.loading ? "text-gray-400 border-gray-500/30"
               : testResult.ok ? "text-emerald-500 border-emerald-500/30" : "text-rose-500 border-rose-500/30"}`}>
@@ -761,11 +860,11 @@ export default function MesUpdate({ isDarkMode = false }) {
           )}
           <div className="flex flex-wrap gap-2">
             <button type="submit" className={btnPrimary} disabled={saving}>{saving ? "กำลังทดสอบ..." : "ทดสอบแล้วบันทึก"}</button>
-            <button type="button" className={btnGhost} onClick={testModbus} disabled={!modbusForm.modbus_host}>ทดสอบอ่าน</button>
+            <button type="button" className={btnGhost} onClick={testModbus} disabled={!modbusForm.modbus_host}>ทดสอบเชื่อมต่อ</button>
             {modbusCfg && (
               <button type="button" className="px-3 py-2 rounded-xl text-xs font-bold border border-rose-500/40 text-rose-500 hover:bg-rose-500/10"
                 onClick={disableModbus}>
-                ไม่ใช้ Modbus
+                ไม่เชื่อมต่อเครื่องสแกน
               </button>
             )}
           </div>
@@ -929,13 +1028,13 @@ export default function MesUpdate({ isDarkMode = false }) {
           <div className={`text-sm font-bold ${textMain}`}>QR Code ที่อ่านได้</div>
           <div className="text-[11px]">
             {!modbusReady ? (
-              <span className="text-gray-400">Modbus: ไม่ได้ใช้ (สแกนด้วย scanner ลงช่องด้านล่าง)</span>
+              <span className="text-gray-400">เครื่องสแกน: ไม่ได้เชื่อมต่อ (สแกนด้วย scanner ลงช่องด้านล่าง)</span>
             ) : !hasLocked ? (
-              <span className="text-gray-400">Modbus {modbusCfg.modbus_host}:{modbusCfg.modbus_port} — รอ Lock station</span>
+              <span className="text-gray-400">เครื่องสแกน {scannerAddr} — รอ Lock station</span>
             ) : modbusStatus?.ok === false ? (
-              <span className="text-rose-500 font-bold">Modbus {modbusCfg.modbus_host}: {modbusStatus.text}</span>
+              <span className="text-rose-500 font-bold">เครื่องสแกน {scannerAddr}: {modbusStatus.text}</span>
             ) : (
-              <span className="text-emerald-500 font-bold">● Modbus {modbusCfg.modbus_host}:{modbusCfg.modbus_port} กำลังอ่าน</span>
+              <span className="text-emerald-500 font-bold">● เครื่องสแกน {scannerAddr} พร้อมรับค่า</span>
             )}
           </div>
         </div>
@@ -943,8 +1042,8 @@ export default function MesUpdate({ isDarkMode = false }) {
         <div className={`flex flex-wrap items-center gap-3 p-3 rounded-xl ${isDarkMode ? "bg-slate-900" : "bg-gray-50"}`}>
           {scan ? (
             <>
-              <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${scan.source === "Modbus" ? "bg-blue-600 text-white" : "bg-violet-600 text-white"}`}>
-                {scan.source === "Modbus" ? "จาก Modbus" : "จาก Scanner"}
+              <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${scan.source === "Scanner" ? "bg-violet-600 text-white" : "bg-blue-600 text-white"}`}>
+                {SOURCE_LABEL[scan.source] || scan.source}
               </span>
               <span className={`text-lg font-mono font-black break-all ${textMain}`}>{scan.sn}</span>
               <span className="text-[11px] text-gray-400">{formatTime(scan.at)}</span>
