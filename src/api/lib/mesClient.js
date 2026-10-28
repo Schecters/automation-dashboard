@@ -5,7 +5,7 @@ import { MES_API_BASE } from './config.js';
 //  - lineinfo : [{ LINE_NAME, SECTION_NAME, GROUP_NAME, STATION_NAME }]
 //  - molist   : [{ MO_NUMBER, MODEL_NAME, LINE_NAME }] (พารามิเตอร์ line ของ MES ไม่กรอง ต้องกรองเอง)
 //  - routing-update : POST /api/mes/tdc/typed/routing-update
-//                     { routingData: ["SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1"], testData: [] }
+//                     { routingData: ["SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1"], testData: "" }
 // ==========================================
 
 const MES_TIMEOUT_MS = 10000;
@@ -81,7 +81,8 @@ export const buildRoutingRow = ({ sn, mo, model, line, section, group, station, 
   ].join('}');
 
 export const routingUpdate = async (rows) => {
-  const payload = { routingData: rows, testData: [] };
+  // testData เป็นข้อความว่าง "" ตามตัวอย่างจาก MES (ไม่ใช่ [])
+  const payload = { routingData: rows, testData: '' };
   // path ต้องมี / เดียว (แบบ //tdc ได้ 404)
   const result = await mesFetch('/api/mes/tdc/typed/routing-update', {
     method: 'POST',
