@@ -32,7 +32,10 @@ const mesFetch = async (pathAndQuery, options = {}) => {
     }
     if (!res.ok) {
       // MES ตอบ error เป็น { message } หรือข้อความธรรมดา (เช่น "routingData is required")
-      const detail = body && typeof body === 'object' ? body.message : typeof body === 'string' ? body.trim().slice(0, 300) : '';
+      // หรือ { error, raw: { result, description } }
+      const detail = body && typeof body === 'object'
+        ? body.message || body.raw?.description || body.error || ''
+        : typeof body === 'string' ? body.trim().slice(0, 300) : '';
       const msg = detail ? `MES ตอบกลับ HTTP ${res.status}: ${detail}` : `MES ตอบกลับ HTTP ${res.status}`;
       throw new MesError(msg, res.status, body);
     }
@@ -79,6 +82,32 @@ export const buildRoutingRow = ({ sn, mo, model, line, section, group, station, 
     cleanField(empNo),
     '1',
   ].join('}');
+
+// ตรวจ / check-in SN ที่ station ก่อน update (ตามโปรแกรม Themister ของไลน์)
+// ไม่ check ก่อน -> routing-update ตอบ "SN NOT INPUT"
+// คืน { ok, result, description, text }
+export const routingCheck = async ({ sn, mo, model, line, section, group, station }) => {
+  const payload = {
+    sn: cleanField(sn),
+    mo: cleanField(mo),
+    model: cleanField(model),
+    line: cleanField(line),
+    section: cleanField(section),
+    group: cleanField(group),
+    station: cleanField(station),
+    testSubProgram: '',
+    testSubVersion: '',
+    testData: '',
+  };
+  const { body, text } = await mesFetch('/api/mes/tdc/routing-check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const result = body && typeof body === 'object' ? String(body.result || '') : '';
+  const description = body && typeof body === 'object' ? String(body.description || '') : String(text || '');
+  return { ok: result.toUpperCase() === 'OK', result, description, text };
+};
 
 export const routingUpdate = async (rows) => {
   // testData เป็นข้อความว่าง "" ตามตัวอย่างจาก MES (ไม่ใช่ [])

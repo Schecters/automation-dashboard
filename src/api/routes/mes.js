@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { io } from '../lib/realtime.js';
 import { JWT_SECRET, MES_QUERY_EMP_NO } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
-import { getLineInfo, getMoList, buildRoutingRow, routingUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
+import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs } from '../lib/mesLog.js';
 import { findOperatorExams } from './operatorData.js';
 import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
@@ -210,11 +210,27 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
     let responseText = '';
     let message = '';
     try {
-      const mesRes = await routingUpdate([row]);
-      success = true;
-      responseText = mesRes.text;
-      message = `ส่ง ${result} สำเร็จ`;
-      lastSent.set(key, { sn, result });
+      // 1) routing-check ก่อน (check-in SN ที่ station) — ไม่ OK ไม่ต้อง update
+      const check = await routingCheck({
+        sn,
+        mo,
+        model: moRow.MODEL_NAME,
+        line,
+        section: st.SECTION_NAME,
+        group: st.GROUP_NAME,
+        station: st.STATION_NAME,
+      });
+      if (!check.ok) {
+        responseText = `CHECK: ${check.text}`;
+        message = `Routing ไม่ผ่าน: ${check.description || check.result || 'MES ไม่ตอบ OK'}`;
+      } else {
+        // 2) routing-update
+        const mesRes = await routingUpdate([row]);
+        success = true;
+        responseText = `CHECK OK; UPDATE: ${mesRes.text}`;
+        message = `ส่ง ${result} สำเร็จ`;
+        lastSent.set(key, { sn, result });
+      }
     } catch (err) {
       responseText = err.body ? JSON.stringify(err.body) : err.message;
       message = err.message;
