@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { socket, deviceId } from "../../socket";
+import MesLogin from "../../pages/MesLogin";
+import { operatorLogin } from "./mesApi";
 
 // 🏭 MES Update: operator login ด้วยรหัสพนักงาน → เลือก WO ของแต่ละ station → Lock
 // แล้วระบบอ่าน QR จากเครื่องสแกน Keyence (Modbus TCP) ทีละ station จากบนลงล่าง และยิง routing-update ไป MES
@@ -7,6 +9,7 @@ import { socket, deviceId } from "../../socket";
 const API_URL = "/api";
 const MES_AUTH_KEY = "mesAuth";
 const MES_LOCKED_KEY = "mesLockedStations";
+const MES_TERMINAL_KEY = "mesTerminal"; // ชื่อเครื่องนี้ (แต่ละเครื่องมีชุด Line / Station ของตัวเอง)
 const POLL_INTERVAL_MS = 700;
 const STAFF_ROLES = ["admin", "me"];
 
@@ -84,6 +87,9 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
   const [runtime, setRuntime] = useState({}); // id -> { sn, status, text, at }
 
   // ตั้งค่า (ME/admin)
+  const [terminal, setTerminal] = useState(() => loadJson(MES_TERMINAL_KEY, ""));
+  const [terminalInput, setTerminalInput] = useState(terminal);
+  const [terminals, setTerminals] = useState([]);
   const [staff, setStaff] = useState(loadDashboardStaff);
   const [showSettings, setShowSettings] = useState(false);
   const [staffLogin, setStaffLogin] = useState({ employeeId: "", password: "" });
@@ -142,8 +148,12 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
   // ---------- โหลดข้อมูล ----------
   const fetchStations = useCallback(async () => {
     if (!mesAuthRef.current && !staff) return;
+    if (!terminal) {
+      setStations([]);
+      return;
+    }
     try {
-      const res = await fetch(`${API_URL}/mes/stations`, { headers: readHeaders() });
+      const res = await fetch(`${API_URL}/mes/stations?terminal=${encodeURIComponent(terminal)}`, { headers: readHeaders() });
       if (mesAuthRef.current && (await handleOperator401(res))) return;
       const data = await res.json();
       if (data.success) {
@@ -159,18 +169,43 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     } catch (err) {
       console.error("Fetch MES stations error:", err);
     }
-  }, [readHeaders, handleOperator401, staff]);
+  }, [readHeaders, handleOperator401, staff, terminal]);
 
   const fetchLogs = useCallback(async () => {
-    if (!mesAuthRef.current && !staff) return;
+    if ((!mesAuthRef.current && !staff) || !terminal) return;
     try {
-      const res = await fetch(`${API_URL}/mes/logs?limit=30`, { headers: readHeaders() });
+      const res = await fetch(`${API_URL}/mes/logs?limit=30&terminal=${encodeURIComponent(terminal)}`, { headers: readHeaders() });
       const data = await res.json();
       if (data.success) setLogs(data.data);
     } catch (err) {
       console.error("Fetch MES logs error:", err);
     }
-  }, [readHeaders, staff]);
+  }, [readHeaders, staff, terminal]);
+
+  const fetchTerminals = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/mes/terminals`, { headers: readHeaders() });
+      const data = await res.json();
+      if (data.success) setTerminals(data.data);
+    } catch (err) {
+      console.error("Fetch MES terminals error:", err);
+    }
+  }, [readHeaders]);
+
+  // ตั้งชื่อเครื่องนี้ (เก็บในเครื่อง) — เปลี่ยนเครื่องแล้วปลด Lock ทั้งหมด
+  const applyTerminal = () => {
+    const name = terminalInput.trim().slice(0, 100);
+    if (!name) {
+      setMessage({ type: "error", text: "กรุณาตั้งชื่อเครื่อง" });
+      return;
+    }
+    saveJson(MES_TERMINAL_KEY, name);
+    setTerminal(name);
+    setLocked(new Set());
+    saveJson(MES_LOCKED_KEY, []);
+    setLogs([]);
+    setMessage({ type: "ok", text: `เครื่องนี้ใช้ชื่อ "${name}" แล้ว` });
+  };
 
   const fetchLineInfo = useCallback(async () => {
     try {
@@ -301,27 +336,20 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     if (!id) return;
     setLoginBusy(true);
     setMessage(null);
-    try {
-      const res = await fetch(`${API_URL}/mes/operator-login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employee_id: id, device_id: deviceId }),
-      });
-      const data = await res.json();
-      if (!data.success) {
-        setMessage({ type: "error", text: data.message });
-        setLoginId("");
-        return;
-      }
-      const auth = { token: data.token, expires_at: data.expires_at, operator: data.operator };
-      saveJson(MES_AUTH_KEY, auth);
-      setMesAuth(auth);
-      setLoginId("");
-    } catch (err) {
-      setMessage({ type: "error", text: `เข้าสู่ระบบไม่สำเร็จ: ${err.message}` });
-    } finally {
-      setLoginBusy(false);
+    const { auth, error } = await operatorLogin(id);
+    setLoginBusy(false);
+    setLoginId("");
+    if (error) {
+      setMessage({ type: "error", text: error });
+      return;
     }
+    applyOperatorAuth(auth);
+  };
+
+  const applyOperatorAuth = (auth) => {
+    saveJson(MES_AUTH_KEY, auth);
+    setMesAuth(auth);
+    setMessage(null);
   };
 
   const toggleLock = (st) => {
@@ -399,6 +427,10 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     if (showSettings && staff && lineInfo.length === 0) fetchLineInfo();
   }, [showSettings, staff, lineInfo.length, fetchLineInfo]);
 
+  useEffect(() => {
+    if (showSettings && staff) fetchTerminals();
+  }, [showSettings, staff, fetchTerminals]);
+
   const staffFetch = async (url, options) => {
     const res = await fetch(url, { ...options, headers: staffHeaders() });
     const data = await res.json().catch(() => ({}));
@@ -422,7 +454,7 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     try {
       await staffFetch(form.id ? `${API_URL}/mes/stations/${form.id}` : `${API_URL}/mes/stations`, {
         method: form.id ? "PUT" : "POST",
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, terminal }),
       });
       setForm(null);
       setTestResult(null);
@@ -541,11 +573,35 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
           </div>
           <div className="flex gap-2">
             <button type="button" className={btnGhost} onClick={fetchLineInfo}>↻ โหลด Line จาก MES</button>
-            <button type="button" className={btnPrimary} onClick={() => { setForm({ ...EMPTY_FORM }); setTestResult(null); }}>
+            <button type="button" className={btnPrimary} disabled={!terminal}
+              onClick={() => { setForm({ ...EMPTY_FORM }); setTestResult(null); }}>
               + เพิ่ม station
             </button>
             <button type="button" className={btnGhost} onClick={() => { setShowSettings(false); setForm(null); }}>
               เสร็จ
+            </button>
+          </div>
+        </div>
+
+        <div className={`rounded-2xl border p-4 space-y-2 ${card}`}>
+          <div className={`text-sm font-bold ${textMain}`}>
+            ชื่อเครื่องนี้ {terminal ? <span className="text-blue-400">: {terminal}</span> : <span className="text-rose-500">(ยังไม่ได้ตั้ง)</span>}
+          </div>
+          <p className="text-[11px] text-gray-400">
+            แต่ละเครื่องมีชุด Line / Station ของตัวเอง ตั้งชื่อเครื่องใหม่ หรือเลือกชื่อเดิมจากรายการ
+            (เช่น เครื่องที่ล้างข้อมูลเบราว์เซอร์ไป จะได้ station เดิมกลับมา)
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input className={`${input} w-64`} list="mes-terminal-list" placeholder="เช่น STF32-PC1"
+              value={terminalInput} onChange={(e) => setTerminalInput(e.target.value)} />
+            <datalist id="mes-terminal-list">
+              {terminals.map((t) => (
+                <option key={t.terminal} value={t.terminal}>{`${t.station_count} station · ${t.lines || "-"}`}</option>
+              ))}
+            </datalist>
+            <button type="button" className={btnPrimary} onClick={applyTerminal}
+              disabled={!terminalInput.trim() || terminalInput.trim() === terminal}>
+              ใช้ชื่อนี้กับเครื่องนี้
             </button>
           </div>
         </div>
@@ -705,6 +761,10 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        <div className={`px-3 py-2 rounded-xl border text-xs ${card}`}>
+          <span className="text-gray-400">เครื่อง </span>
+          <span className={`font-bold ${terminal ? "text-blue-400" : "text-rose-500"}`}>{terminal || "ยังไม่ได้ตั้ง"}</span>
+        </div>
         {mesAuth && (
           <div className={`px-3 py-2 rounded-xl border text-xs ${card}`}>
             <span className={`font-bold ${textMain}`}>{mesAuth.operator?.name || mesAuth.operator?.employee_id}</span>
@@ -728,6 +788,18 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
         {messageBar}
         {renderSettings()}
       </div>
+    );
+  }
+
+  // เปิดเต็มจอที่ /MES -> หน้า login แบบเดียวกับ Login.jsx
+  if (!mesAuth && !embedded) {
+    return (
+      <MesLogin
+        onLoggedIn={applyOperatorAuth}
+        onOpenSettings={openSettings}
+        terminal={terminal}
+        message={message?.type === "error" ? message.text : ""}
+      />
     );
   }
 
@@ -763,7 +835,9 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
 
       {stations.length === 0 ? (
         <div className={`rounded-2xl border p-10 text-center text-xs text-gray-400 ${card}`}>
-          ยังไม่มี station — ให้ ME / Admin กด "⚙ ตั้งค่า" เพื่อเพิ่ม
+          {terminal
+            ? `เครื่อง "${terminal}" ยังไม่มี station — ให้ ME / Admin กด "⚙ ตั้งค่า" เพื่อเพิ่ม`
+            : `เครื่องนี้ยังไม่ได้ตั้งชื่อ — ให้ ME / Admin กด "⚙ ตั้งค่า" เพื่อตั้งชื่อเครื่องและเลือก Line / Station`}
         </div>
       ) : (
         <div className="space-y-3">

@@ -235,7 +235,7 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         id: "mes_update",
         label: "MES Update",
         category: "Production Control",
-        // operator login ด้วยรหัสพนักงานในหน้าเอง (หรือเปิด /mes แบบเต็มจอ) การตั้งค่าแก้ได้เฉพาะ ME/admin
+        // operator login ด้วยรหัสพนักงานในหน้าเอง (หรือเปิด /MES แบบเต็มจอ) การตั้งค่าแก้ได้เฉพาะ ME/admin
         roles: ["admin", "me", "ie", "pd", "q", "view"],
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

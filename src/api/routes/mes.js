@@ -181,7 +181,7 @@ router.get('/api/mes/molist', authenticateMesOrStaff, async (req, res) => {
 // ------------------------------------------
 // ช่อง station
 // ------------------------------------------
-const STATION_COLUMNS = `id, sort_order, label, line, section_name, group_name, station, mo, model_name,
+const STATION_COLUMNS = `id, terminal, sort_order, label, line, section_name, group_name, station, mo, model_name,
   modbus_host, modbus_port, unit_id, register_type, start_address, word_count, byte_order,
   clear_after_read, updated_by, updated_at`;
 
@@ -195,11 +195,23 @@ const getStation = async (id) => {
 
 const emitStations = (type, id) => io.emit('mes_stations_updated', { type, id });
 
+const text = (v, max) => {
+  const s = String(v ?? '').trim();
+  return s ? s.slice(0, max) : null;
+};
+
+// ชื่อเครื่อง: แต่ละเครื่องหน้าไลน์มีชุด station ของตัวเอง (ชื่อเก็บใน localStorage ของเครื่องนั้น)
+const parseTerminal = (v) => text(v, 100);
+
+// station ของเครื่องที่ระบุ ?terminal=
 router.get('/api/mes/stations', authenticateMesOrStaff, async (req, res) => {
+  const terminal = parseTerminal(req.query.terminal);
+  if (!terminal) return res.json({ success: true, data: [] });
   try {
     const r = await pool.query(
       `SELECT ${STATION_COLUMNS} FROM automation_lines.mes_stations
-       WHERE is_active = TRUE ORDER BY sort_order ASC, id ASC`
+       WHERE is_active = TRUE AND terminal = $1 ORDER BY sort_order ASC, id ASC`,
+      [terminal]
     );
     res.json({ success: true, data: r.rows });
   } catch (err) {
@@ -208,10 +220,20 @@ router.get('/api/mes/stations', authenticateMesOrStaff, async (req, res) => {
   }
 });
 
-const text = (v, max) => {
-  const s = String(v ?? '').trim();
-  return s ? s.slice(0, max) : null;
-};
+// รายชื่อเครื่องที่มีอยู่ (ไว้เลือกตอนตั้งค่าเครื่องใหม่ / เครื่องที่ล้างข้อมูลเบราว์เซอร์)
+router.get('/api/mes/terminals', authenticateMesOrStaff, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT terminal, COUNT(*)::int AS station_count, STRING_AGG(DISTINCT line, ', ') AS lines
+       FROM automation_lines.mes_stations WHERE is_active = TRUE
+       GROUP BY terminal ORDER BY terminal`
+    );
+    res.json({ success: true, data: r.rows });
+  } catch (err) {
+    console.error('Fetch MES Terminals Error:', err);
+    res.status(500).json({ success: false, message: 'ดึงรายชื่อเครื่องไม่สำเร็จ' });
+  }
+});
 
 const parseStationBody = (body) => {
   const data = {
@@ -238,22 +260,25 @@ const parseStationBody = (body) => {
 router.post('/api/mes/stations', ...requireStaff, async (req, res) => {
   const { error, data } = parseStationBody(req.body);
   if (error) return res.status(400).json({ success: false, message: error });
+  const terminal = parseTerminal(req.body?.terminal);
+  if (!terminal) return res.status(400).json({ success: false, message: 'กรุณาตั้งชื่อเครื่องนี้ก่อนเพิ่ม station' });
   try {
     const r = await pool.query(
       `INSERT INTO automation_lines.mes_stations
-         (sort_order, label, line, section_name, group_name, station, modbus_host, modbus_port, unit_id,
+         (terminal, sort_order, label, line, section_name, group_name, station, modbus_host, modbus_port, unit_id,
           register_type, start_address, word_count, byte_order, clear_after_read, updated_by)
        VALUES (
-         (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM automation_lines.mes_stations WHERE is_active = TRUE),
+         $15,
+         (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM automation_lines.mes_stations WHERE is_active = TRUE AND terminal = $15),
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING ${STATION_COLUMNS}`,
       [data.label, data.line, data.section_name, data.group_name, data.station, data.modbus_host, data.modbus_port,
         data.unit_id, data.register_type, data.start_address, data.word_count, data.byte_order,
-        data.clear_after_read, req.user.employee_id]
+        data.clear_after_read, req.user.employee_id, terminal]
     );
     const row = r.rows[0];
     await auditStaff(req, 'MES_STATION_CREATE', `MES Station #${row.id}`,
-      `${row.line} / ${row.station} -> ${row.modbus_host}:${row.modbus_port}`);
+      `[${terminal}] ${row.line} / ${row.station} -> ${row.modbus_host}:${row.modbus_port}`);
     emitStations('create', row.id);
     res.json({ success: true, data: row });
   } catch (err) {
@@ -465,16 +490,19 @@ router.post('/api/mes/stations/:id/update-route', authenticateMesOperator, async
 
 router.get('/api/mes/logs', authenticateMesOrStaff, async (req, res) => {
   const stationId = req.query.station_id ? Number(req.query.station_id) : null;
+  const terminal = parseTerminal(req.query.terminal);
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500);
   try {
     const r = await pool.query(
       `SELECT l.id, l.mes_station_id, l.emp_no, l.emp_name, l.line, l.station, l.mo, l.sn, l.success,
               l.mes_response, l.created_at
        FROM automation_lines.mes_update_logs l
+       LEFT JOIN automation_lines.mes_stations s ON s.id = l.mes_station_id
        WHERE ($1::int IS NULL OR l.mes_station_id = $1::int)
+         AND ($3::text IS NULL OR s.terminal = $3::text)
        ORDER BY l.created_at DESC, l.id DESC
        LIMIT $2`,
-      [stationId, limit]
+      [stationId, limit, terminal]
     );
     res.json({ success: true, data: r.rows });
   } catch (err) {

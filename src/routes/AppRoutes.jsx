@@ -122,7 +122,7 @@ export default function AppRoutes() {
       />
 
       <Route
-        path="/mes"
+        path="/MES"
         element={
           <Suspense fallback={null}>
             <MesUpdate isDarkMode={isDarkMode} />

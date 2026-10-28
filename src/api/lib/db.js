@@ -192,6 +192,12 @@ const migrateMes = async () => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    // แต่ละเครื่อง (terminal) มีชุด station / line ของตัวเอง
+    await pool.query(`ALTER TABLE automation_lines.mes_stations ADD COLUMN IF NOT EXISTS terminal VARCHAR(100) NOT NULL DEFAULT 'default';`);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_mes_stations_terminal
+        ON automation_lines.mes_stations (terminal, sort_order) WHERE is_active = TRUE;
+    `);
     // ชื่อผู้สแกน (operator login จาก Excel คะแนนสอบ อาจไม่มีในตาราง operators)
     await pool.query(`ALTER TABLE automation_lines.mes_update_logs ADD COLUMN IF NOT EXISTS emp_name VARCHAR(150);`);
     await pool.query(`

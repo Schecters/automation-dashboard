@@ -79,7 +79,7 @@ git push
 - Daily PM Checklist: API `src/api/routes/pmChecklist.js`, ตาราง `automation_lines.pm_*` (สร้างอัตโนมัติใน `db.js`)
   - หน้า `DailyCheckList.jsx` (กรอก/ประวัติ/อนุมัติ) และ `PmChecklistBuilder.jsx` (สร้างแม่แบบ: admin, me)
   - ผู้อนุมัติ: ตำแหน่ง Line (owner/leader/supervisor จาก `line_owners`) หรือ role (me/ie/q/pd/admin), Admin อนุมัติแทนได้ทุกขั้น
-- MES Update: หน้า `src/components/mes/MesUpdate.jsx` (เมนู "MES Update" หรือเปิดเต็มจอที่ `/mes`), API `src/api/routes/mes.js`
+- MES Update: หน้า `src/components/mes/MesUpdate.jsx` (เมนู "MES Update" หรือเปิดเต็มจอที่ `https://10.204.206.1:5173/MES` (หน้า login `src/pages/MesLogin.jsx`)), API `src/api/routes/mes.js`
   - operator login ด้วยรหัสพนักงาน ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดก็ได้ใน `auth.excel_configs`
     ฟังก์ชัน `findOperatorExams` ใน `operatorData.js`, เรียกตรงได้ที่ `/api/operator-exam-check?employee_id=`)
     ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40
@@ -87,3 +87,4 @@ git push
     รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS}EMPNO}1` (`buildRoutingRow`)
   - อ่าน QR จาก Keyence ผ่าน Modbus TCP (`src/api/lib/modbusReader.js`, package `modbus-serial`) ตั้งค่า IP/register ต่อ station
   - ตาราง `automation_lines.mes_stations`, `automation_lines.mes_update_logs` / แก้ station ได้เฉพาะ ME, admin
+  - แต่ละเครื่องมีชุด station ของตัวเอง: คอลัมน์ `mes_stations.terminal` = ชื่อเครื่องที่เก็บใน localStorage `mesTerminal`
