@@ -5,7 +5,8 @@
 export const SESSION_EXPIRED_EVENT = "auth:session-expired";
 
 // API ที่ตอบ 401 ได้ตามปกติ (เช่น กรอกรหัสผ่านผิด) ไม่ใช่ session หลุด
-const IGNORED_PATHS = ["/api/login", "/api/register", "/api/auth/"];
+// /api/mes/ ใช้ token operator แยกต่างหาก หน้า MES Update จัดการ 401 เอง
+const IGNORED_PATHS = ["/api/login", "/api/register", "/api/auth/", "/api/mes/"];
 
 const getRequestUrl = (input) => {
   if (typeof input === "string") return input;

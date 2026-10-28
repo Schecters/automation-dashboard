@@ -94,6 +94,40 @@ export const authenticateToken = async (req, res, next) => {
   });
 };
 
+// 🏭 token ของ operator หน้า MES Update (login ด้วยรหัสพนักงานอย่างเดียว)
+// ใช้ได้เฉพาะ API /api/mes/* — token dashboard ใช้แทนไม่ได้ และ token นี้ก็ใช้ API อื่นไม่ได้
+// (authenticateToken เทียบกับ current_session_token ใน auth.users จึงไม่ผ่าน)
+export const MES_OPERATOR_KIND = 'mes_operator';
+
+export const authenticateMesOperator = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) {
+    return res.status(401).json({ code: 'MES_LOGIN_REQUIRED', message: 'กรุณาเข้าสู่ระบบด้วยรหัสพนักงาน' });
+  }
+
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+    if (err || decoded?.kind !== MES_OPERATOR_KIND) {
+      return res.status(401).json({ code: 'MES_SESSION_EXPIRED', message: 'หมดเวลาการใช้งาน กรุณาเข้าสู่ระบบใหม่' });
+    }
+    try {
+      // ถูกลบออกจากระบบ Operator แล้ว ใช้ต่อไม่ได้
+      const op = await pool.query(
+        'SELECT employee_id, name FROM automation_lines.operators WHERE employee_id::text = $1::text',
+        [decoded.employee_id]
+      );
+      if (op.rowCount === 0) {
+        return res.status(401).json({ code: 'MES_OPERATOR_NOT_FOUND', message: 'ไม่พบรหัสพนักงานนี้ในระบบ Operator' });
+      }
+      req.mesOperator = { employee_id: String(op.rows[0].employee_id), name: op.rows[0].name || '' };
+      return next();
+    } catch (dbErr) {
+      console.error('MES Operator Auth Error:', dbErr);
+      return res.status(500).json({ message: 'Authentication verification failed' });
+    }
+  });
+};
+
 export const requireAdmin = (req, res, next) => {
   if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({ message: 'Forbidden: Admin access required only' });

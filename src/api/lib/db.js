@@ -150,6 +150,58 @@ const migratePmChecklist = async () => {
   }
 };
 
+// 🏭 MES Update: ช่อง station (Line/Station/WO + เครื่องสแกน Modbus) และประวัติการยิง routing-update
+const migrateMes = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS automation_lines.mes_stations (
+        id SERIAL PRIMARY KEY,
+        sort_order INT NOT NULL DEFAULT 0,
+        label VARCHAR(100),
+        line VARCHAR(100) NOT NULL,
+        section_name VARCHAR(100),
+        group_name VARCHAR(100),
+        station VARCHAR(100) NOT NULL,
+        mo VARCHAR(50),
+        model_name VARCHAR(100),
+        modbus_host VARCHAR(100) NOT NULL,
+        modbus_port INT NOT NULL DEFAULT 502,
+        unit_id INT NOT NULL DEFAULT 1,
+        register_type VARCHAR(10) NOT NULL DEFAULT 'holding' CHECK (register_type IN ('holding', 'input')),
+        start_address INT NOT NULL DEFAULT 0,
+        word_count INT NOT NULL DEFAULT 20,
+        byte_order VARCHAR(2) NOT NULL DEFAULT 'BE' CHECK (byte_order IN ('BE', 'LE')),
+        clear_after_read BOOLEAN NOT NULL DEFAULT FALSE,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        updated_by VARCHAR(50),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS automation_lines.mes_update_logs (
+        id SERIAL PRIMARY KEY,
+        mes_station_id INT REFERENCES automation_lines.mes_stations(id) ON DELETE SET NULL,
+        emp_no VARCHAR(50),
+        line VARCHAR(100),
+        station VARCHAR(100),
+        mo VARCHAR(50),
+        sn VARCHAR(200),
+        success BOOLEAN NOT NULL,
+        mes_response TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_mes_update_logs_station
+        ON automation_lines.mes_update_logs (mes_station_id, created_at DESC);
+    `);
+    console.log('✅ ตาราง MES Update พร้อมใช้งาน');
+  } catch (err) {
+    console.error('❌ สร้างตาราง MES Update ไม่สำเร็จ:', err.message);
+  }
+};
+
 // ตรวจสอบและเตรียมตารางใน Database
 export const initDatabase = async () => {
   try {
@@ -158,6 +210,7 @@ export const initDatabase = async () => {
 
     await migrateTaskAcceptedAt();
     await migratePmChecklist();
+    await migrateMes();
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS auth.audit_logs (

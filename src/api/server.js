@@ -23,6 +23,7 @@ import stationAssignmentsRoutes from './routes/stationAssignments.js';
 import plcRoutes from './routes/plc.js';
 import operatorDataRoutes from './routes/operatorData.js';
 import pmChecklistRoutes from './routes/pmChecklist.js';
+import mesRoutes from './routes/mes.js';
 
 const app = express();
 
@@ -77,6 +78,7 @@ app.use(stationAssignmentsRoutes);
 app.use(plcRoutes);
 app.use(operatorDataRoutes);
 app.use(pmChecklistRoutes); // Daily PM Checklist
+app.use(mesRoutes); // MES Update (Keyence Modbus -> MES routing-update)
 
 // ==========================================
 // ⚠️ Error handler กลาง: ไฟล์ผิดประเภท / ใหญ่เกิน / body ใหญ่เกิน -> ตอบ JSON 400/413

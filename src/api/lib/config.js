@@ -20,6 +20,9 @@ if (!JWT_SECRET || JWT_SECRET.length < 32 || JWT_SECRET === 'super_secret_jwt_ke
   throw new Error('JWT_SECRET ใน .env ไม่ได้ตั้งค่า หรือสั้นเกินไป (ต้องเป็นค่าสุ่มอย่างน้อย 32 ตัวอักษร)');
 }
 
+// 🏭 MES API (หน้า MES Update) — ไม่ใช่ความลับ จึงมีค่า default ได้ เปลี่ยนได้ใน .env
+export const MES_API_BASE = (process.env.MES_API_BASE || 'http://10.204.212.22:5207').replace(/\/+$/, '');
+
 // ==========================================
 // 📁 เตรียมโฟลเดอร์สำหรับจัดเก็บไฟล์
 // ==========================================

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { socket, getSocketAuth, deviceId } from '../socket';
 import { SESSION_EXPIRED_EVENT } from '../authInterceptor';
@@ -8,6 +8,9 @@ let isLoggingOut = false;
 
 import Login from '../pages/Login';
 import Home from '../pages/Home';
+
+// หน้า MES Update แบบเต็มจอ (kiosk หน้าไลน์) มี login operator ของตัวเอง
+const MesUpdate = lazy(() => import('../components/mes/MesUpdate'));
 
 export default function AppRoutes() {
   const navigate = useNavigate();
@@ -116,6 +119,15 @@ export default function AppRoutes() {
       <Route 
         path="/home" 
         element={<Home isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />} 
+      />
+
+      <Route
+        path="/mes"
+        element={
+          <Suspense fallback={null}>
+            <MesUpdate isDarkMode={isDarkMode} />
+          </Suspense>
+        }
       />
 
       {/* Redirect หน้าเก่าทั้งหมดไปยัง /home */}
