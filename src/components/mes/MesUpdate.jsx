@@ -1,15 +1,20 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { socket, deviceId } from "../../socket";
 import MesLogin from "../../pages/MesLogin";
-import { operatorLogin } from "./mesApi";
 
-// 🏭 MES Update: operator login ด้วยรหัสพนักงาน → เลือก WO ของแต่ละ station → Lock
-// แล้วระบบอ่าน QR จากเครื่องสแกน Keyence (Modbus TCP) ทีละ station จากบนลงล่าง และยิง routing-update ไป MES
-// การแก้ Line / Station / Modbus ทำได้เฉพาะ ME และ admin
+// 🏭 MES Update (เปิดที่ https://<server>:5173/MES)
+//  - operator login ด้วยรหัสพนักงาน → เลือก WO ของแต่ละ station → Lock station ที่จะใช้
+//  - เครื่องนี้ต่อ Modbus TCP กับเครื่องสแกน Keyence "ครั้งเดียว" (ตั้งค่าต่อเครื่อง)
+//  - สแกน QR 1 ครั้ง → ส่ง routing-update ไปทุก station ที่ Lock ตามลำดับ บนลงล่าง (station 1 → 2 → ...)
+//  - สแกนด้วย scanner ที่ต่อเครื่อง (พิมพ์ลงช่อง + Enter) ได้ด้วย
+//  - การตั้งค่า (ชื่อเครื่อง / Modbus / station) ทำได้เฉพาะ ME และ admin — เก็บในเบราว์เซอร์ของเครื่องนี้ (ไม่ใช้ DB)
+//  - ประวัติการส่ง server เขียนเป็นไฟล์ CSV ที่ D:\MES logs
 const API_URL = "/api";
 const MES_AUTH_KEY = "mesAuth";
 const MES_LOCKED_KEY = "mesLockedStations";
-const MES_TERMINAL_KEY = "mesTerminal"; // ชื่อเครื่องนี้ (แต่ละเครื่องมีชุด Line / Station ของตัวเอง)
+const MES_TERMINAL_KEY = "mesTerminal"; // ชื่อเครื่องนี้ (ใช้ระบุในไฟล์ log)
+const MES_STATIONS_KEY = "mesStations"; // station ของเครื่องนี้ เรียงบนลงล่าง
+const MES_MODBUS_KEY = "mesModbus"; // การเชื่อมต่อเครื่องสแกน (null = ไม่ใช้ Modbus)
 const POLL_INTERVAL_MS = 700;
 const STAFF_ROLES = ["admin", "me"];
 
@@ -56,13 +61,8 @@ const formatTime = (v) =>
       })
     : "-";
 
-const EMPTY_FORM = {
-  id: null,
-  label: "",
-  line: "",
-  section_name: "",
-  group_name: "",
-  station: "",
+const EMPTY_STATION_FORM = { id: null, label: "", line: "", section_name: "", group_name: "", station: "" };
+const EMPTY_MODBUS_FORM = {
   modbus_host: "",
   modbus_port: 502,
   unit_id: 1,
@@ -70,47 +70,60 @@ const EMPTY_FORM = {
   start_address: 0,
   word_count: 20,
   byte_order: "BE",
-  clear_after_read: false,
+  clear_after_read: true,
 };
 
-export default function MesUpdate({ isDarkMode = false, embedded = false }) {
+export default function MesUpdate({ isDarkMode = false }) {
   const [mesAuth, setMesAuth] = useState(loadMesAuth);
-  const [loginId, setLoginId] = useState("");
-  const [loginBusy, setLoginBusy] = useState(false);
   const [message, setMessage] = useState(null); // { type: 'ok'|'error', text }
 
-  const [stations, setStations] = useState([]);
+  const [terminal, setTerminal] = useState(() => loadJson(MES_TERMINAL_KEY, ""));
+  const [terminalInput, setTerminalInput] = useState(terminal);
+  const [modbusCfg, setModbusCfg] = useState(() => loadJson(MES_MODBUS_KEY, null)); // null = ไม่ใช้ Modbus
+
+  const [stations, setStationsState] = useState(() => loadJson(MES_STATIONS_KEY, []));
   const [lineInfo, setLineInfo] = useState([]);
   const [moByLine, setMoByLine] = useState({});
   const [logs, setLogs] = useState([]);
   const [locked, setLocked] = useState(() => new Set(loadJson(MES_LOCKED_KEY, [])));
-  const [runtime, setRuntime] = useState({}); // id -> { sn, result, status, text, at }
-  // station ที่กดปุ่ม FAIL ไว้: ชิ้นงานถัดไปที่สแกนจะส่งเป็น FAIL แล้วกลับเป็น PASS อัตโนมัติ
+  const [runtime, setRuntime] = useState({}); // stationId -> { sn, result, status, text }
+  // station ที่กด FAIL ไว้: ชิ้นถัดไปส่ง PASS ให้ station ก่อนหน้า แล้วส่ง FAIL ที่ station นี้ และหยุด
   const [failArmed, setFailArmed] = useState(() => new Set());
 
+  // QR ล่าสุด (จาก Modbus หรือ Scanner)
+  const [scan, setScan] = useState(null); // { sn, source, at }
+  const [modbusStatus, setModbusStatus] = useState(null); // { ok, text }
+  const [manualInput, setManualInput] = useState("");
+  const [sending, setSending] = useState(false);
+
   // ตั้งค่า (ME/admin)
-  const [terminal, setTerminal] = useState(() => loadJson(MES_TERMINAL_KEY, ""));
-  const [terminalInput, setTerminalInput] = useState(terminal);
-  const [terminals, setTerminals] = useState([]);
   const [staff, setStaff] = useState(loadDashboardStaff);
   const [showSettings, setShowSettings] = useState(false);
   const [staffLogin, setStaffLogin] = useState({ employeeId: "", password: "" });
-  const [form, setForm] = useState(null);
+  const [stationForm, setStationForm] = useState(null);
+  const [modbusForm, setModbusForm] = useState(EMPTY_MODBUS_FORM);
   const [testResult, setTestResult] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const stationsRef = useRef([]);
   const lockedRef = useRef(locked);
   const failArmedRef = useRef(failArmed);
-  const lastSeenRef = useRef({}); // id -> SN ล่าสุดที่อ่านได้ ("" = register ว่าง / ถูกล้าง)
   const mesAuthRef = useRef(mesAuth);
+  const sendingRef = useRef(false);
+  const lastSeenRef = useRef(""); // SN ล่าสุดที่อ่านจาก Modbus ("" = register ว่าง / ถูกล้าง)
+  const manualRef = useRef(null);
+  const terminalRef = useRef(terminal);
+  const modbusCfgRef = useRef(modbusCfg);
+
   // ให้ loop อ่านสแกน / callback เห็นค่าล่าสุด (effect นี้ประกาศก่อน effect อื่น จึงรันก่อน)
   useEffect(() => {
     stationsRef.current = stations;
     lockedRef.current = locked;
     failArmedRef.current = failArmed;
     mesAuthRef.current = mesAuth;
-  }, [stations, locked, mesAuth, failArmed]);
+    terminalRef.current = terminal;
+    modbusCfgRef.current = modbusCfg;
+  }, [stations, locked, failArmed, mesAuth, terminal, modbusCfg]);
 
   const operatorHeaders = useCallback(
     () => ({ "Content-Type": "application/json", Authorization: `Bearer ${mesAuthRef.current?.token || ""}` }),
@@ -132,6 +145,7 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     setMesAuth(null);
     setLocked(new Set());
     saveJson(MES_LOCKED_KEY, []);
+    setFailArmed(new Set());
     if (text) setMessage({ type: "error", text });
   }, []);
 
@@ -150,32 +164,16 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     [logoutOperator]
   );
 
-  // ---------- โหลดข้อมูล ----------
-  const fetchStations = useCallback(async () => {
-    if (!mesAuthRef.current && !staff) return;
-    if (!terminal) {
-      setStations([]);
-      return;
-    }
-    try {
-      const res = await fetch(`${API_URL}/mes/stations?terminal=${encodeURIComponent(terminal)}`, { headers: readHeaders() });
-      if (mesAuthRef.current && (await handleOperator401(res))) return;
-      const data = await res.json();
-      if (data.success) {
-        setStations(data.data);
-        // station ที่ถูกลบไปแล้ว เอาออกจากรายการที่ Lock
-        setLocked((prev) => {
-          const ids = new Set(data.data.map((s) => s.id));
-          const next = new Set([...prev].filter((id) => ids.has(id)));
-          saveJson(MES_LOCKED_KEY, [...next]);
-          return next;
-        });
-      }
-    } catch (err) {
-      console.error("Fetch MES stations error:", err);
-    }
-  }, [readHeaders, handleOperator401, staff, terminal]);
+  // ---------- station ในเครื่อง ----------
+  const setStations = useCallback((updater) => {
+    setStationsState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      saveJson(MES_STATIONS_KEY, next);
+      return next;
+    });
+  }, []);
 
+  // ---------- โหลดข้อมูล ----------
   const fetchLogs = useCallback(async () => {
     if ((!mesAuthRef.current && !staff) || !terminal) return;
     try {
@@ -186,31 +184,6 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
       console.error("Fetch MES logs error:", err);
     }
   }, [readHeaders, staff, terminal]);
-
-  const fetchTerminals = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_URL}/mes/terminals`, { headers: readHeaders() });
-      const data = await res.json();
-      if (data.success) setTerminals(data.data);
-    } catch (err) {
-      console.error("Fetch MES terminals error:", err);
-    }
-  }, [readHeaders]);
-
-  // ตั้งชื่อเครื่องนี้ (เก็บในเครื่อง) — เปลี่ยนเครื่องแล้วปลด Lock ทั้งหมด
-  const applyTerminal = () => {
-    const name = terminalInput.trim().slice(0, 100);
-    if (!name) {
-      setMessage({ type: "error", text: "กรุณาตั้งชื่อเครื่อง" });
-      return;
-    }
-    saveJson(MES_TERMINAL_KEY, name);
-    setTerminal(name);
-    setLocked(new Set());
-    saveJson(MES_LOCKED_KEY, []);
-    setLogs([]);
-    setMessage({ type: "ok", text: `เครื่องนี้ใช้ชื่อ "${name}" แล้ว` });
-  };
 
   const fetchLineInfo = useCallback(async () => {
     try {
@@ -240,9 +213,8 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
 
   useEffect(() => {
     if (!canRead) return;
-    fetchStations();
     fetchLogs();
-  }, [canRead, fetchStations, fetchLogs]);
+  }, [canRead, fetchLogs]);
 
   // โหลด WO ของทุก Line ที่มี station
   const stationLines = useMemo(() => [...new Set(stations.map((s) => s.line))], [stations]);
@@ -254,15 +226,10 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
   }, [canRead, stationLines, moByLine, fetchMoList]);
 
   useEffect(() => {
-    const onStations = () => fetchStations();
     const onUpdated = () => fetchLogs();
-    socket.on("mes_stations_updated", onStations);
     socket.on("mes_updated", onUpdated);
-    return () => {
-      socket.off("mes_stations_updated", onStations);
-      socket.off("mes_updated", onUpdated);
-    };
-  }, [fetchStations, fetchLogs]);
+    return () => socket.off("mes_updated", onUpdated);
+  }, [fetchLogs]);
 
   // token operator หมดอายุตอนเปลี่ยนกะ (07:40 / 19:40) -> กลับหน้า login อัตโนมัติ
   useEffect(() => {
@@ -275,49 +242,49 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     return () => clearTimeout(timer);
   }, [mesAuth, logoutOperator]);
 
-  // ---------- อ่านสแกน + update route (ทีละ station จากบนลงล่าง) ----------
-  const setStationRuntime = (id, patch) =>
-    setRuntime((prev) => ({ ...prev, [id]: { ...prev[id], ...patch, at: new Date().toISOString() } }));
+  // ---------- ส่ง QR 1 ตัว ไปทุก station ที่ Lock ตามลำดับบนลงล่าง ----------
+  const setStationRuntime = (id, patch) => setRuntime((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
 
-  useEffect(() => {
-    if (!mesAuth || locked.size === 0) return;
-    let cancelled = false;
-    let timer = null;
-    const lastSeen = lastSeenRef.current;
-
-    const tick = async () => {
+  const processScan = useCallback(
+    async (rawSn, source) => {
+      const sn = String(rawSn || "").replace(/[}\r\n\t]/g, "").trim();
+      if (!sn || sendingRef.current) return false;
       const targets = stationsRef.current.filter((s) => lockedRef.current.has(s.id));
-      for (const st of targets) {
-        if (cancelled) return;
-        try {
-          const res = await fetch(`${API_URL}/mes/stations/${st.id}/read`, { method: "POST", headers: operatorHeaders() });
-          if (await handleOperator401(res)) return;
-          const data = await res.json();
-          if (!data.success) {
-            setStationRuntime(st.id, { status: "error", text: data.message });
-            continue;
-          }
-          const sn = data.sn;
-          if (!sn) {
-            // register ว่าง (ถูกล้างหลังอ่าน) -> สแกนครั้งถัดไปนับเป็นชิ้นใหม่ แม้ SN เดิม
-            lastSeen[st.id] = "";
-            setStationRuntime(st.id, { connected: true });
-            continue;
-          }
-          if (sn === lastSeen[st.id]) {
-            setStationRuntime(st.id, { connected: true });
-            continue;
-          }
-          lastSeen[st.id] = sn;
-          const result = failArmedRef.current.has(st.id) ? "FAIL" : "PASS";
-          setStationRuntime(st.id, { sn, result, status: "sending", text: `กำลังส่ง ${result} ไป MES...`, connected: true });
+      if (targets.length === 0) {
+        setMessage({ type: "error", text: "ยังไม่ได้ Lock station ใด — กด Lock station ที่จะส่งก่อน" });
+        return false;
+      }
+      sendingRef.current = true;
+      setSending(true);
+      setScan({ sn, source, at: new Date().toISOString() });
+      setRuntime((prev) => {
+        const next = { ...prev };
+        targets.forEach((st) => {
+          next[st.id] = { sn, status: "waiting", text: "รอส่ง" };
+        });
+        return next;
+      });
 
-          const upd = await fetch(`${API_URL}/mes/stations/${st.id}/update-route`, {
+      let allOk = true;
+      try {
+        for (let i = 0; i < targets.length; i++) {
+          const st = targets[i];
+          const result = failArmedRef.current.has(st.id) ? "FAIL" : "PASS";
+          setStationRuntime(st.id, { sn, result, status: "sending", text: `กำลังส่ง ${result}...` });
+          const upd = await fetch(`${API_URL}/mes/update-route`, {
             method: "POST",
             headers: operatorHeaders(),
-            body: JSON.stringify({ sn, result }),
+            body: JSON.stringify({
+              terminal: terminalRef.current,
+              sn,
+              result,
+              line: st.line,
+              station: st.station,
+              group: st.group_name,
+              mo: st.mo,
+            }),
           });
-          if (await handleOperator401(upd)) return;
+          if (await handleOperator401(upd)) return false;
           const out = await upd.json();
           setStationRuntime(st.id, {
             sn,
@@ -327,20 +294,72 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
               ? out.message || "Update สำเร็จ"
               : `${out.message || "Update ไม่สำเร็จ"}${out.mes_response ? ` — ${out.mes_response}` : ""}`,
           });
+
+          const rest = targets.slice(i + 1);
           if (!out.success) {
-            // ส่งไม่สำเร็จ ให้ลองใหม่รอบหน้าได้ (ยังคงโหมด FAIL ไว้)
-            delete lastSeen[st.id];
-          } else if (result === "FAIL") {
-            // ส่ง FAIL แล้ว กลับเป็นโหมด PASS
+            // station นี้ไม่ผ่าน -> ไม่ส่ง station ถัดไป (MES ต้องผ่านตามลำดับ)
+            allOk = false;
+            rest.forEach((r) => setStationRuntime(r.id, { sn, status: "stopped", text: "ไม่ได้ส่ง (station ก่อนหน้าไม่สำเร็จ)" }));
+            break;
+          }
+          if (result === "FAIL") {
+            // ชิ้นงาน FAIL ที่ station นี้ -> ไม่ส่ง station ถัดไป และกลับเป็นโหมด PASS
             setFailArmed((prev) => {
               const next = new Set(prev);
               next.delete(st.id);
               return next;
             });
+            rest.forEach((r) => setStationRuntime(r.id, { sn, status: "stopped", text: "ไม่ได้ส่ง (ชิ้นงาน FAIL ก่อนหน้า)" }));
+            break;
           }
-        } catch (err) {
-          setStationRuntime(st.id, { status: "error", text: err.message, connected: false });
         }
+      } catch (err) {
+        allOk = false;
+        setMessage({ type: "error", text: `ส่งไป MES ไม่สำเร็จ: ${err.message}` });
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
+      }
+      return allOk;
+    },
+    [operatorHeaders, handleOperator401]
+  );
+
+  // อ่านเครื่องสแกนผ่าน Modbus (ครั้งเดียวต่อรอบ ไม่ใช่ต่อ station)
+  const modbusReady = Boolean(modbusCfg?.modbus_host);
+  const hasLocked = locked.size > 0;
+  useEffect(() => {
+    if (!mesAuth || !modbusReady || !hasLocked) return;
+    let cancelled = false;
+    let timer = null;
+
+    const tick = async () => {
+      try {
+        if (!sendingRef.current) {
+          const res = await fetch(`${API_URL}/mes/modbus/read`, {
+            method: "POST",
+            headers: operatorHeaders(),
+            body: JSON.stringify(modbusCfgRef.current),
+          });
+          if (await handleOperator401(res)) return;
+          const data = await res.json();
+          if (cancelled) return;
+          if (!data.success) {
+            setModbusStatus({ ok: false, text: data.message });
+          } else {
+            setModbusStatus({ ok: true, text: "เชื่อมต่อแล้ว" });
+            const sn = data.sn;
+            if (!sn) {
+              // register ว่าง (ถูกล้างหลังอ่าน) -> สแกนครั้งถัดไปนับเป็นชิ้นใหม่ แม้ SN เดิม
+              lastSeenRef.current = "";
+            } else if (sn !== lastSeenRef.current) {
+              lastSeenRef.current = sn;
+              await processScan(sn, "Modbus");
+            }
+          }
+        }
+      } catch (err) {
+        if (!cancelled) setModbusStatus({ ok: false, text: err.message });
       }
       if (!cancelled) timer = setTimeout(tick, POLL_INTERVAL_MS);
     };
@@ -349,32 +368,31 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [mesAuth, locked, operatorHeaders, handleOperator401]);
+  }, [mesAuth, modbusReady, hasLocked, operatorHeaders, handleOperator401, processScan]);
 
   // ---------- operator actions ----------
-  const handleOperatorLogin = async (e) => {
-    e.preventDefault();
-    const id = loginId.trim();
-    if (!id) return;
-    setLoginBusy(true);
-    setMessage(null);
-    const { auth, error } = await operatorLogin(id);
-    setLoginBusy(false);
-    setLoginId("");
-    if (error) {
-      setMessage({ type: "error", text: error });
-      return;
-    }
-    applyOperatorAuth(auth);
-  };
-
   const applyOperatorAuth = (auth) => {
     saveJson(MES_AUTH_KEY, auth);
     setMesAuth(auth);
     setMessage(null);
   };
 
-  // กด FAIL: ชิ้นถัดไปที่สแกนที่ station นี้ส่งเป็น FAIL (กดอีกครั้งเพื่อยกเลิก)
+  const submitManual = async (e) => {
+    e.preventDefault();
+    if (sendingRef.current) {
+      setMessage({ type: "error", text: "กำลังส่งชิ้นก่อนหน้าอยู่ รอสักครู่" });
+      return;
+    }
+    const value = manualInput;
+    setManualInput("");
+    await processScan(value, "Scanner");
+    manualRef.current?.focus();
+  };
+
+  const resendLast = () => {
+    if (scan?.sn) processScan(scan.sn, scan.source);
+  };
+
   const toggleFail = (st) => {
     setFailArmed((prev) => {
       const next = new Set(prev);
@@ -385,16 +403,16 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
   };
 
   const toggleLock = (st) => {
+    if (!locked.has(st.id) && !st.mo) {
+      setMessage({ type: "error", text: `กรุณาเลือก WO ของ ${st.label || st.station} ก่อน Lock` });
+      return;
+    }
     if (locked.has(st.id)) {
       setFailArmed((prev) => {
         const next = new Set(prev);
         next.delete(st.id);
         return next;
       });
-    }
-    if (!locked.has(st.id) && !st.mo) {
-      setMessage({ type: "error", text: `กรุณาเลือก WO ของ ${st.label || st.station} ก่อน Lock` });
-      return;
     }
     setLocked((prev) => {
       const next = new Set(prev);
@@ -405,23 +423,11 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     });
   };
 
-  const changeMo = async (st, mo) => {
-    try {
-      const res = await fetch(`${API_URL}/mes/stations/${st.id}/mo`, {
-        method: "PATCH",
-        headers: readHeaders(),
-        body: JSON.stringify({ mo }),
-      });
-      if (mesAuthRef.current && (await handleOperator401(res))) return;
-      const data = await res.json();
-      if (!data.success) {
-        setMessage({ type: "error", text: data.message });
-        return;
-      }
-      setStations((prev) => prev.map((s) => (s.id === st.id ? data.data : s)));
-    } catch (err) {
-      setMessage({ type: "error", text: err.message });
-    }
+  const changeMo = (st, mo) => {
+    const found = (moByLine[st.line] || []).find((m) => String(m.mo) === mo);
+    setStations((prev) =>
+      prev.map((s) => (s.id === st.id ? { ...s, mo: mo || null, model_name: found?.model || null } : s))
+    );
   };
 
   // ---------- staff (ME/admin) ----------
@@ -458,17 +464,14 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
 
   const openSettings = () => {
     setShowSettings(true);
-    setForm(null);
+    setStationForm(null);
     setTestResult(null);
+    setModbusForm(modbusCfg ? { ...EMPTY_MODBUS_FORM, ...modbusCfg } : EMPTY_MODBUS_FORM);
   };
 
   useEffect(() => {
     if (showSettings && staff && lineInfo.length === 0) fetchLineInfo();
   }, [showSettings, staff, lineInfo.length, fetchLineInfo]);
-
-  useEffect(() => {
-    if (showSettings && staff) fetchTerminals();
-  }, [showSettings, staff, fetchTerminals]);
 
   const staffFetch = async (url, options) => {
     const res = await fetch(url, { ...options, headers: staffHeaders() });
@@ -481,66 +484,101 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     return data;
   };
 
-  const lines = useMemo(() => [...new Set(lineInfo.map((r) => r.line))].sort(), [lineInfo]);
-  const stationsOfFormLine = useMemo(
-    () => lineInfo.filter((r) => r.line === form?.line).sort((a, b) => String(a.station).localeCompare(String(b.station))),
-    [lineInfo, form?.line]
-  );
+  // ตั้งชื่อเครื่องนี้ (ใช้ระบุในไฟล์ log)
+  const applyTerminal = () => {
+    const name = terminalInput.trim().slice(0, 100);
+    if (!name) {
+      setMessage({ type: "error", text: "กรุณาตั้งชื่อเครื่อง" });
+      return;
+    }
+    saveJson(MES_TERMINAL_KEY, name);
+    setTerminal(name);
+    setLogs([]);
+    setMessage({ type: "ok", text: `เครื่องนี้ใช้ชื่อ "${name}" แล้ว` });
+  };
 
-  const saveForm = async (e) => {
+  const saveModbus = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
-      await staffFetch(form.id ? `${API_URL}/mes/stations/${form.id}` : `${API_URL}/mes/stations`, {
-        method: form.id ? "PUT" : "POST",
-        body: JSON.stringify({ ...form, terminal }),
-      });
-      setForm(null);
-      setTestResult(null);
-      setMessage({ type: "ok", text: "บันทึก station แล้ว" });
-      fetchStations();
+      // ทดลองอ่านก่อนบันทึก (ตรวจ IP / register ที่ server)
+      await staffFetch(`${API_URL}/mes/modbus/read`, { method: "POST", body: JSON.stringify(modbusForm) });
+      const cfg = { ...modbusForm };
+      saveJson(MES_MODBUS_KEY, cfg);
+      setModbusCfg(cfg);
+      lastSeenRef.current = "";
+      setMessage({ type: "ok", text: "บันทึกการเชื่อมต่อ Modbus ของเครื่องนี้แล้ว" });
     } catch (err) {
-      setMessage({ type: "error", text: err.message });
+      setMessage({ type: "error", text: `ยังไม่บันทึก — ${err.message}` });
     } finally {
       setSaving(false);
     }
   };
 
+  const disableModbus = () => {
+    if (!window.confirm("ไม่ใช้ Modbus กับเครื่องนี้? (สแกนด้วย scanner ลงช่องในหน้าเว็บแทน)")) return;
+    saveJson(MES_MODBUS_KEY, null);
+    setModbusCfg(null);
+    setModbusForm(EMPTY_MODBUS_FORM);
+    setMessage({ type: "ok", text: "ปิดการใช้ Modbus ของเครื่องนี้แล้ว" });
+  };
+
   const testModbus = async () => {
     setTestResult({ loading: true });
     try {
-      const data = await staffFetch(`${API_URL}/mes/modbus/test`, { method: "POST", body: JSON.stringify(form) });
-      setTestResult({ ok: true, text: data.value || "(ว่าง — ยังไม่มีค่าสแกน)", raw: data.raw });
+      const data = await staffFetch(`${API_URL}/mes/modbus/read`, { method: "POST", body: JSON.stringify(modbusForm) });
+      setTestResult({ ok: true, text: data.sn || "(ว่าง — ยังไม่มีค่าสแกน)", raw: data.raw });
     } catch (err) {
       setTestResult({ ok: false, text: err.message });
     }
   };
 
-  const deleteStation = async (st) => {
-    if (!window.confirm(`ลบ station "${st.label || st.station}" (${st.line}) ?`)) return;
-    try {
-      await staffFetch(`${API_URL}/mes/stations/${st.id}`, { method: "DELETE" });
-      fetchStations();
-    } catch (err) {
-      setMessage({ type: "error", text: err.message });
+  const lines = useMemo(() => [...new Set(lineInfo.map((r) => r.line))].sort(), [lineInfo]);
+  const formLine = stationForm?.line;
+  const stationsOfFormLine = useMemo(
+    () =>
+      lineInfo
+        .filter((r) => r.line === formLine)
+        .sort((a, b) => String(a.station).localeCompare(String(b.station))),
+    [lineInfo, formLine]
+  );
+
+  const saveStation = (e) => {
+    e.preventDefault();
+    const { id, label: name, line, section_name, group_name, station } = stationForm;
+    const data = { label: name?.trim() || "", line, section_name, group_name, station };
+    if (id) {
+      // เปลี่ยน Line แล้ว WO เดิมใช้ไม่ได้
+      setStations((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, ...data, ...(s.line !== line ? { mo: null, model_name: null } : {}) } : s))
+      );
+    } else {
+      const newId = `st_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      setStations((prev) => [...prev, { id: newId, ...data, mo: null, model_name: null }]);
     }
+    setStationForm(null);
+    setMessage({ type: "ok", text: "บันทึก station แล้ว" });
   };
 
-  const moveStation = async (index, dir) => {
-    const next = [...stations];
-    const target = index + dir;
-    if (target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
-    setStations(next);
-    try {
-      await staffFetch(`${API_URL}/mes/stations/order`, {
-        method: "PUT",
-        body: JSON.stringify({ ids: next.map((s) => s.id) }),
-      });
-    } catch (err) {
-      setMessage({ type: "error", text: err.message });
-      fetchStations();
-    }
+  const deleteStation = (st) => {
+    if (!window.confirm(`ลบ station "${st.label || st.station}" (${st.line}) ?`)) return;
+    setStations((prev) => prev.filter((s) => s.id !== st.id));
+    setLocked((prev) => {
+      const next = new Set(prev);
+      next.delete(st.id);
+      saveJson(MES_LOCKED_KEY, [...next]);
+      return next;
+    });
+  };
+
+  const moveStation = (index, dir) => {
+    setStations((prev) => {
+      const next = [...prev];
+      const target = index + dir;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   };
 
   // ---------- styles ----------
@@ -551,7 +589,7 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
   const textMain = isDarkMode ? "text-slate-100" : "text-gray-800";
   const label = "text-[11px] font-bold text-gray-400 block mb-1";
   const btnPrimary = "px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-40";
-  const btnGhost = `px-3 py-2 rounded-xl text-xs font-bold border ${
+  const btnGhost = `px-3 py-2 rounded-xl text-xs font-bold border disabled:opacity-40 ${
     isDarkMode ? "border-slate-600 text-slate-300 hover:bg-slate-700" : "border-gray-300 text-gray-600 hover:bg-gray-100"
   }`;
 
@@ -586,12 +624,16 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
       ok: "bg-emerald-600 text-white",
       skipped: "bg-slate-500 text-white",
       sending: "bg-amber-500 text-white",
+      waiting: "bg-slate-400 text-white",
+      stopped: "bg-slate-400 text-white",
       error: "bg-rose-600 text-white",
     }[rt.status];
-    const txt = { ok: "สำเร็จ", skipped: "ซ้ำ", sending: "กำลังส่ง", error: "ผิดพลาด" }[rt.status];
+    const txt = { ok: "สำเร็จ", skipped: "ซ้ำ", sending: "กำลังส่ง", waiting: "รอส่ง", stopped: "ไม่ได้ส่ง", error: "ผิดพลาด" }[
+      rt.status
+    ];
     return (
       <>
-        {rt.result && resultBadge(rt.result)}
+        {rt.result && rt.status !== "waiting" && rt.status !== "stopped" && resultBadge(rt.result)}
         <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${cls}`}>{txt}</span>
       </>
     );
@@ -604,7 +646,7 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
         <form onSubmit={handleStaffLogin} className={`rounded-2xl border p-5 space-y-3 max-w-sm ${card}`}>
           <div className={`text-sm font-bold ${textMain}`}>เข้าสู่ระบบ ME / Admin</div>
           <p className="text-[11px] text-gray-400">
-            การแก้ Line / Station / IP เครื่องสแกน ทำได้เฉพาะ ME หรือ Admin
+            การตั้งค่าชื่อเครื่อง / Modbus / station ทำได้เฉพาะ ME หรือ Admin
             (ถ้าบัญชีนี้เปิด dashboard ค้างไว้ที่เครื่องอื่น จะถูกออกจากระบบที่เครื่องนั้น)
           </p>
           <input className={`${input} w-full`} placeholder="รหัสพนักงาน" value={staffLogin.employeeId}
@@ -620,39 +662,28 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     }
 
     return (
-      <div className="space-y-3">
+      <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="text-xs text-gray-400">
             ตั้งค่าโดย <span className="font-bold text-blue-400">{staff.name || "-"}</span> ({staff.role.toUpperCase()})
           </div>
-          <div className="flex gap-2">
-            <button type="button" className={btnGhost} onClick={fetchLineInfo}>↻ โหลด Line จาก MES</button>
-            <button type="button" className={btnPrimary} disabled={!terminal}
-              onClick={() => { setForm({ ...EMPTY_FORM }); setTestResult(null); }}>
-              + เพิ่ม station
-            </button>
-            <button type="button" className={btnGhost} onClick={() => { setShowSettings(false); setForm(null); }}>
-              เสร็จ
-            </button>
-          </div>
+          <button type="button" className={btnPrimary} onClick={() => { setShowSettings(false); setStationForm(null); }}>
+            เสร็จ
+          </button>
         </div>
 
+        {/* 1) ชื่อเครื่อง */}
         <div className={`rounded-2xl border p-4 space-y-2 ${card}`}>
           <div className={`text-sm font-bold ${textMain}`}>
-            ชื่อเครื่องนี้ {terminal ? <span className="text-blue-400">: {terminal}</span> : <span className="text-rose-500">(ยังไม่ได้ตั้ง)</span>}
+            1. ชื่อเครื่องนี้ {terminal ? <span className="text-blue-400">: {terminal}</span> : <span className="text-rose-500">(ยังไม่ได้ตั้ง)</span>}
           </div>
           <p className="text-[11px] text-gray-400">
-            แต่ละเครื่องมีชุด Line / Station ของตัวเอง ตั้งชื่อเครื่องใหม่ หรือเลือกชื่อเดิมจากรายการ
-            (เช่น เครื่องที่ล้างข้อมูลเบราว์เซอร์ไป จะได้ station เดิมกลับมา)
+            ใช้ระบุเครื่องในไฟล์ประวัติ (D:\MES logs) — การตั้งค่าทั้งหมดในหน้านี้เก็บในเบราว์เซอร์ของเครื่องนี้
+            (ถ้าล้างข้อมูลเบราว์เซอร์ ต้องตั้งค่าใหม่)
           </p>
           <div className="flex flex-wrap gap-2">
-            <input className={`${input} w-64`} list="mes-terminal-list" placeholder="เช่น STF32-PC1"
+            <input className={`${input} w-64`} placeholder="เช่น STF32-PC1"
               value={terminalInput} onChange={(e) => setTerminalInput(e.target.value)} />
-            <datalist id="mes-terminal-list">
-              {terminals.map((t) => (
-                <option key={t.terminal} value={t.terminal}>{`${t.station_count} station · ${t.lines || "-"}`}</option>
-              ))}
-            </datalist>
             <button type="button" className={btnPrimary} onClick={applyTerminal}
               disabled={!terminalInput.trim() || terminalInput.trim() === terminal}>
               ใช้ชื่อนี้กับเครื่องนี้
@@ -660,158 +691,189 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
           </div>
         </div>
 
-        {form && (
-          <form onSubmit={saveForm} className={`rounded-2xl border p-4 space-y-3 ${card}`}>
-            <div className={`text-sm font-bold ${textMain}`}>{form.id ? "แก้ไข station" : "เพิ่ม station"}</div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div>
-                <label className={label}>ชื่อที่แสดง (ไม่บังคับ)</label>
-                <input className={`${input} w-full`} value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
-              </div>
-              <div>
-                <label className={label}>Line (MES)</label>
-                <select className={`${input} w-full`} value={form.line} required
-                  onChange={(e) => setForm({ ...form, line: e.target.value, station: "", section_name: "", group_name: "" })}>
-                  <option value="">— เลือก Line —</option>
-                  {form.line && !lines.includes(form.line) && <option value={form.line}>{form.line}</option>}
-                  {lines.map((l) => <option key={l} value={l}>{l}</option>)}
-                </select>
-              </div>
-              <div className="sm:col-span-2">
-                <label className={label}>Station (MES)</label>
-                <select className={`${input} w-full`} required
-                  value={form.station ? `${form.section_name}|${form.group_name}|${form.station}` : ""}
-                  onChange={(e) => {
-                    const r = stationsOfFormLine.find((x) => `${x.section}|${x.group}|${x.station}` === e.target.value);
-                    setForm({ ...form, station: r?.station || "", section_name: r?.section || "", group_name: r?.group || "" });
-                  }}>
-                  <option value="">— เลือก Station —</option>
-                  {form.station && !stationsOfFormLine.some((x) => x.station === form.station) && (
-                    <option value={`${form.section_name}|${form.group_name}|${form.station}`}>{form.station}</option>
-                  )}
-                  {stationsOfFormLine.map((r) => (
-                    <option key={`${r.section}|${r.group}|${r.station}`} value={`${r.section}|${r.group}|${r.station}`}>
-                      {r.station} · {r.section} / {r.group}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={label}>IP เครื่องสแกน (Modbus TCP)</label>
-                <input className={`${input} w-full`} value={form.modbus_host} required placeholder="192.168.0.10"
-                  onChange={(e) => setForm({ ...form, modbus_host: e.target.value })} />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className={label}>Port</label>
-                  <input type="number" className={`${input} w-full`} value={form.modbus_port}
-                    onChange={(e) => setForm({ ...form, modbus_port: e.target.value })} />
-                </div>
-                <div>
-                  <label className={label}>Unit ID</label>
-                  <input type="number" className={`${input} w-full`} value={form.unit_id}
-                    onChange={(e) => setForm({ ...form, unit_id: e.target.value })} />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className={label}>Register</label>
-                  <select className={`${input} w-full`} value={form.register_type}
-                    onChange={(e) => setForm({ ...form, register_type: e.target.value })}>
-                    <option value="holding">Holding (4x)</option>
-                    <option value="input">Input (3x)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className={label}>Address เริ่ม</label>
-                  <input type="number" className={`${input} w-full`} value={form.start_address}
-                    onChange={(e) => setForm({ ...form, start_address: e.target.value })} />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className={label}>จำนวน word</label>
-                  <input type="number" className={`${input} w-full`} value={form.word_count}
-                    onChange={(e) => setForm({ ...form, word_count: e.target.value })} />
-                </div>
-                <div>
-                  <label className={label}>ลำดับ byte</label>
-                  <select className={`${input} w-full`} value={form.byte_order}
-                    onChange={(e) => setForm({ ...form, byte_order: e.target.value })}>
-                    <option value="BE">Hi-Lo (BE)</option>
-                    <option value="LE">Lo-Hi (LE)</option>
-                  </select>
-                </div>
-              </div>
+        {/* 2) Modbus ของเครื่อง (ตั้งครั้งเดียว) */}
+        <form onSubmit={saveModbus} className={`rounded-2xl border p-4 space-y-3 ${card}`}>
+          <div className={`text-sm font-bold ${textMain}`}>
+            2. การเชื่อมต่อเครื่องสแกน (Modbus TCP) ของเครื่องนี้{" "}
+            {modbusCfg
+              ? <span className="text-emerald-500">— ใช้งานอยู่ {modbusCfg.modbus_host}:{modbusCfg.modbus_port}</span>
+              : <span className="text-gray-400">— ยังไม่ได้ตั้ง (ใช้สแกนลงช่องในหน้าเว็บได้)</span>}
+          </div>
+          <p className="text-[11px] text-gray-400">ตั้งครั้งเดียว ใช้กับทุก station ของเครื่องนี้ — สแกน 1 ครั้งส่งให้ทุก station ที่ Lock ตามลำดับ</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+            <div className="col-span-2">
+              <label className={label}>IP เครื่องสแกน</label>
+              <input className={`${input} w-full`} value={modbusForm.modbus_host} required placeholder="192.168.0.10"
+                onChange={(e) => setModbusForm({ ...modbusForm, modbus_host: e.target.value })} />
             </div>
-            <label className="flex items-center gap-2 text-xs text-gray-400">
-              <input type="checkbox" checked={form.clear_after_read}
-                onChange={(e) => setForm({ ...form, clear_after_read: e.target.checked })} />
-              อ่านแล้วล้าง register เป็น 0 (Holding เท่านั้น — กันอ่านค่าเดิมซ้ำ)
-            </label>
-            {testResult && (
-              <div className={`text-xs p-2 rounded-lg border ${testResult.loading ? "text-gray-400 border-gray-500/30"
-                : testResult.ok ? "text-emerald-500 border-emerald-500/30" : "text-rose-500 border-rose-500/30"}`}>
-                {testResult.loading ? "กำลังอ่าน..." : (
-                  <>
-                    <div className="font-bold break-all">{testResult.text}</div>
-                    {testResult.raw && <div className="text-[10px] opacity-70 break-all">raw: [{testResult.raw.join(", ")}]</div>}
-                  </>
-                )}
-              </div>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <button type="submit" className={btnPrimary} disabled={saving}>{saving ? "กำลังบันทึก..." : "บันทึก"}</button>
-              <button type="button" className={btnGhost} onClick={testModbus} disabled={!form.modbus_host}>ทดสอบอ่าน Modbus</button>
-              <button type="button" className={btnGhost} onClick={() => { setForm(null); setTestResult(null); }}>ยกเลิก</button>
+            <div>
+              <label className={label}>Port</label>
+              <input type="number" className={`${input} w-full`} value={modbusForm.modbus_port}
+                onChange={(e) => setModbusForm({ ...modbusForm, modbus_port: e.target.value })} />
             </div>
-          </form>
-        )}
-
-        <div className={`rounded-2xl border divide-y ${card} ${isDarkMode ? "divide-slate-700/60" : "divide-gray-100"}`}>
-          {stations.length === 0 && <div className="p-6 text-center text-xs text-gray-400">ยังไม่มี station</div>}
-          {stations.map((st, i) => (
-            <div key={st.id} className="p-3 flex flex-wrap items-center gap-3">
-              <div className="flex flex-col">
-                <button type="button" className="text-xs text-gray-400 hover:text-blue-500 disabled:opacity-20" disabled={i === 0}
-                  onClick={() => moveStation(i, -1)}>▲</button>
-                <button type="button" className="text-xs text-gray-400 hover:text-blue-500 disabled:opacity-20"
-                  disabled={i === stations.length - 1} onClick={() => moveStation(i, 1)}>▼</button>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className={`text-sm font-bold truncate ${textMain}`}>{st.label || st.station}</div>
-                <div className="text-[11px] text-gray-400">
-                  <span className="text-blue-400 font-semibold">{st.line}</span> · {st.station} · {st.section_name}/{st.group_name}
-                </div>
-                <div className="text-[11px] text-gray-400">
-                  {st.modbus_host}:{st.modbus_port} · unit {st.unit_id} · {st.register_type} {st.start_address} × {st.word_count} · {st.byte_order}
-                </div>
-              </div>
-              <button type="button" className={btnGhost} onClick={() => { setForm({ ...EMPTY_FORM, ...st }); setTestResult(null); }}>
-                แก้ไข
-              </button>
+            <div>
+              <label className={label}>Unit ID</label>
+              <input type="number" className={`${input} w-full`} value={modbusForm.unit_id}
+                onChange={(e) => setModbusForm({ ...modbusForm, unit_id: e.target.value })} />
+            </div>
+            <div>
+              <label className={label}>Register</label>
+              <select className={`${input} w-full`} value={modbusForm.register_type}
+                onChange={(e) => setModbusForm({ ...modbusForm, register_type: e.target.value })}>
+                <option value="holding">Holding (4x)</option>
+                <option value="input">Input (3x)</option>
+              </select>
+            </div>
+            <div>
+              <label className={label}>Address เริ่ม</label>
+              <input type="number" className={`${input} w-full`} value={modbusForm.start_address}
+                onChange={(e) => setModbusForm({ ...modbusForm, start_address: e.target.value })} />
+            </div>
+            <div>
+              <label className={label}>จำนวน word</label>
+              <input type="number" className={`${input} w-full`} value={modbusForm.word_count}
+                onChange={(e) => setModbusForm({ ...modbusForm, word_count: e.target.value })} />
+            </div>
+            <div>
+              <label className={label}>ลำดับ byte</label>
+              <select className={`${input} w-full`} value={modbusForm.byte_order}
+                onChange={(e) => setModbusForm({ ...modbusForm, byte_order: e.target.value })}>
+                <option value="BE">Hi-Lo (BE)</option>
+                <option value="LE">Lo-Hi (LE)</option>
+              </select>
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-gray-400">
+            <input type="checkbox" checked={modbusForm.clear_after_read}
+              onChange={(e) => setModbusForm({ ...modbusForm, clear_after_read: e.target.checked })} />
+            อ่านแล้วล้าง register เป็น 0 (Holding เท่านั้น — สแกนชิ้นเดิมซ้ำได้ เช่น ส่ง FAIL หลัง PASS)
+          </label>
+          {testResult && (
+            <div className={`text-xs p-2 rounded-lg border ${testResult.loading ? "text-gray-400 border-gray-500/30"
+              : testResult.ok ? "text-emerald-500 border-emerald-500/30" : "text-rose-500 border-rose-500/30"}`}>
+              {testResult.loading ? "กำลังอ่าน..." : (
+                <>
+                  <div className="font-bold break-all">{testResult.text}</div>
+                  {testResult.raw && <div className="text-[10px] opacity-70 break-all">raw: [{testResult.raw.join(", ")}]</div>}
+                </>
+              )}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button type="submit" className={btnPrimary} disabled={saving}>{saving ? "กำลังทดสอบ..." : "ทดสอบแล้วบันทึก"}</button>
+            <button type="button" className={btnGhost} onClick={testModbus} disabled={!modbusForm.modbus_host}>ทดสอบอ่าน</button>
+            {modbusCfg && (
               <button type="button" className="px-3 py-2 rounded-xl text-xs font-bold border border-rose-500/40 text-rose-500 hover:bg-rose-500/10"
-                onClick={() => deleteStation(st)}>
-                ลบ
+                onClick={disableModbus}>
+                ไม่ใช้ Modbus
+              </button>
+            )}
+          </div>
+        </form>
+
+        {/* 3) Station (แค่ Line / Station) */}
+        <div className={`rounded-2xl border ${card}`}>
+          <div className="p-4 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className={`text-sm font-bold ${textMain}`}>3. Station ของเครื่องนี้ (เรียงตามลำดับที่ส่ง บน → ล่าง)</div>
+              <p className="text-[11px] text-gray-400">เลือกแค่ Line / Station จาก MES</p>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" className={btnGhost} onClick={fetchLineInfo}>↻ โหลด Line จาก MES</button>
+              <button type="button" className={btnPrimary} onClick={() => setStationForm({ ...EMPTY_STATION_FORM })}>
+                + เพิ่ม station
               </button>
             </div>
-          ))}
+          </div>
+
+          {stationForm && (
+            <form onSubmit={saveStation} className={`mx-4 mb-4 rounded-xl border p-4 space-y-3 ${isDarkMode ? "border-slate-700" : "border-gray-200"}`}>
+              <div className={`text-sm font-bold ${textMain}`}>{stationForm.id ? "แก้ไข station" : "เพิ่ม station"}</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div>
+                  <label className={label}>Line (MES)</label>
+                  <select className={`${input} w-full`} value={stationForm.line} required
+                    onChange={(e) => setStationForm({ ...stationForm, line: e.target.value, station: "", section_name: "", group_name: "" })}>
+                    <option value="">— เลือก Line —</option>
+                    {stationForm.line && !lines.includes(stationForm.line) && <option value={stationForm.line}>{stationForm.line}</option>}
+                    {lines.map((l) => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className={label}>Station (MES)</label>
+                  <select className={`${input} w-full`} required
+                    value={stationForm.station ? `${stationForm.section_name}|${stationForm.group_name}|${stationForm.station}` : ""}
+                    onChange={(e) => {
+                      const r = stationsOfFormLine.find((x) => `${x.section}|${x.group}|${x.station}` === e.target.value);
+                      setStationForm({ ...stationForm, station: r?.station || "", section_name: r?.section || "", group_name: r?.group || "" });
+                    }}>
+                    <option value="">— เลือก Station —</option>
+                    {stationForm.station && !stationsOfFormLine.some((x) => x.station === stationForm.station) && (
+                      <option value={`${stationForm.section_name}|${stationForm.group_name}|${stationForm.station}`}>{stationForm.station}</option>
+                    )}
+                    {stationsOfFormLine.map((r) => (
+                      <option key={`${r.section}|${r.group}|${r.station}`} value={`${r.section}|${r.group}|${r.station}`}>
+                        {r.station} · {r.section} / {r.group}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={label}>ชื่อเรียก (ไม่บังคับ)</label>
+                  <input className={`${input} w-full`} value={stationForm.label || ""}
+                    onChange={(e) => setStationForm({ ...stationForm, label: e.target.value })} />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="submit" className={btnPrimary}>บันทึก</button>
+                <button type="button" className={btnGhost} onClick={() => setStationForm(null)}>ยกเลิก</button>
+              </div>
+            </form>
+          )}
+
+          <div className={`divide-y border-t ${isDarkMode ? "divide-slate-700/60 border-slate-700/60" : "divide-gray-100 border-gray-100"}`}>
+            {stations.length === 0 && <div className="p-6 text-center text-xs text-gray-400">ยังไม่มี station</div>}
+            {stations.map((st, i) => (
+              <div key={st.id} className="p-3 flex flex-wrap items-center gap-3">
+                <div className="flex flex-col">
+                  <button type="button" className="text-xs text-gray-400 hover:text-blue-500 disabled:opacity-20" disabled={i === 0}
+                    onClick={() => moveStation(i, -1)}>▲</button>
+                  <button type="button" className="text-xs text-gray-400 hover:text-blue-500 disabled:opacity-20"
+                    disabled={i === stations.length - 1} onClick={() => moveStation(i, 1)}>▼</button>
+                </div>
+                <span className="w-6 h-6 shrink-0 rounded-full bg-blue-600 text-white text-[11px] font-black flex items-center justify-center">
+                  {i + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-sm font-bold truncate ${textMain}`}>{st.label || st.station}</div>
+                  <div className="text-[11px] text-gray-400">
+                    <span className="text-blue-400 font-semibold">{st.line}</span> · {st.station} · {st.section_name}/{st.group_name}
+                  </div>
+                </div>
+                <button type="button" className={btnGhost} onClick={() => setStationForm({ ...EMPTY_STATION_FORM, ...st })}>
+                  แก้ไข
+                </button>
+                <button type="button" className="px-3 py-2 rounded-xl text-xs font-bold border border-rose-500/40 text-rose-500 hover:bg-rose-500/10"
+                  onClick={() => deleteStation(st)}>
+                  ลบ
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     );
   };
 
   // ---------- render ----------
-  const wrapper = embedded
-    ? "space-y-5 pb-10"
-    : `min-h-screen p-4 sm:p-6 space-y-5 ${isDarkMode ? "bg-[#0F172A]" : "bg-[#F4F6F8]"}`;
+  const wrapper = `min-h-screen p-4 sm:p-6 space-y-5 ${isDarkMode ? "bg-[#0F172A]" : "bg-[#F4F6F8]"}`;
 
   const header = (
     <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
       <div>
         <h2 className={`text-2xl font-bold ${isDarkMode ? "text-white" : "text-gray-900"}`}>MES Update</h2>
         <p className={`text-xs mt-1 ${isDarkMode ? "text-slate-400" : "text-gray-500"}`}>
-          สแกน QR จาก Keyence แล้ว update route ใน MES ตาม station ที่เลือก
+          สแกน QR 1 ครั้ง → ส่ง update route ไปทุก station ที่ Lock ตามลำดับบนลงล่าง
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -845,8 +907,7 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     );
   }
 
-  // เปิดเต็มจอที่ /MES -> หน้า login แบบเดียวกับ Login.jsx
-  if (!mesAuth && !embedded) {
+  if (!mesAuth) {
     return (
       <MesLogin
         onLoggedIn={applyOperatorAuth}
@@ -857,41 +918,63 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
     );
   }
 
-  if (!mesAuth) {
-    return (
-      <div className={wrapper}>
-        {header}
-        <form onSubmit={handleOperatorLogin} className={`rounded-2xl border p-6 space-y-4 max-w-sm mx-auto mt-10 ${card}`}>
-          <div className={`text-lg font-bold text-center ${textMain}`}>เข้าสู่ระบบ Operator</div>
-          <p className="text-[11px] text-gray-400 text-center">กรอกหรือสแกนรหัสพนักงาน (ต้องเคยทำข้อสอบในระบบ)</p>
-          <input
-            className={`${input} w-full text-center text-base tracking-widest`}
-            value={loginId}
-            onChange={(e) => setLoginId(e.target.value)}
-            placeholder="รหัสพนักงาน"
-            autoFocus
-            inputMode="numeric"
-          />
-          {messageBar}
-          <button type="submit" className={`${btnPrimary} w-full py-3`} disabled={loginBusy || !loginId.trim()}>
-            {loginBusy ? "กำลังตรวจสอบ..." : "เข้าสู่ระบบ"}
-          </button>
-          <p className="text-[10px] text-gray-400 text-center">ระบบจะออกจากระบบอัตโนมัติเวลา 07:40 และ 19:40</p>
-        </form>
-      </div>
-    );
-  }
-
   return (
     <div className={wrapper}>
       {header}
       {messageBar}
 
+      {/* QR ที่อ่านได้ล่าสุด + ช่องสแกนด้วย scanner */}
+      <div className={`rounded-2xl border p-4 space-y-3 ${card}`}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className={`text-sm font-bold ${textMain}`}>QR Code ที่อ่านได้</div>
+          <div className="text-[11px]">
+            {!modbusReady ? (
+              <span className="text-gray-400">Modbus: ไม่ได้ใช้ (สแกนด้วย scanner ลงช่องด้านล่าง)</span>
+            ) : !hasLocked ? (
+              <span className="text-gray-400">Modbus {modbusCfg.modbus_host}:{modbusCfg.modbus_port} — รอ Lock station</span>
+            ) : modbusStatus?.ok === false ? (
+              <span className="text-rose-500 font-bold">Modbus {modbusCfg.modbus_host}: {modbusStatus.text}</span>
+            ) : (
+              <span className="text-emerald-500 font-bold">● Modbus {modbusCfg.modbus_host}:{modbusCfg.modbus_port} กำลังอ่าน</span>
+            )}
+          </div>
+        </div>
+
+        <div className={`flex flex-wrap items-center gap-3 p-3 rounded-xl ${isDarkMode ? "bg-slate-900" : "bg-gray-50"}`}>
+          {scan ? (
+            <>
+              <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${scan.source === "Modbus" ? "bg-blue-600 text-white" : "bg-violet-600 text-white"}`}>
+                {scan.source === "Modbus" ? "จาก Modbus" : "จาก Scanner"}
+              </span>
+              <span className={`text-lg font-mono font-black break-all ${textMain}`}>{scan.sn}</span>
+              <span className="text-[11px] text-gray-400">{formatTime(scan.at)}</span>
+              <button type="button" className={`${btnGhost} ml-auto`} onClick={resendLast} disabled={sending}>
+                ↻ ส่งอีกครั้ง
+              </button>
+            </>
+          ) : (
+            <span className="text-xs text-gray-400">ยังไม่มีการสแกน</span>
+          )}
+        </div>
+
+        <form onSubmit={submitManual} className="flex gap-2">
+          <input
+            ref={manualRef}
+            className={`${input} flex-1 text-sm font-mono`}
+            placeholder="สแกนด้วย scanner หรือพิมพ์ QR แล้วกด Enter"
+            value={manualInput}
+            onChange={(e) => setManualInput(e.target.value)}
+            disabled={!hasLocked}
+          />
+          <button type="submit" className={btnPrimary} disabled={!manualInput.trim() || sending || !hasLocked}>
+            {sending ? "กำลังส่ง..." : "ส่ง"}
+          </button>
+        </form>
+      </div>
+
       {stations.length === 0 ? (
         <div className={`rounded-2xl border p-10 text-center text-xs text-gray-400 ${card}`}>
-          {terminal
-            ? `เครื่อง "${terminal}" ยังไม่มี station — ให้ ME / Admin กด "⚙ ตั้งค่า" เพื่อเพิ่ม`
-            : `เครื่องนี้ยังไม่ได้ตั้งชื่อ — ให้ ME / Admin กด "⚙ ตั้งค่า" เพื่อตั้งชื่อเครื่องและเลือก Line / Station`}
+          เครื่องนี้ยังไม่มี station — ให้ ME / Admin กด "⚙ ตั้งค่า" เพื่อเพิ่ม
         </div>
       ) : (
         <div className="space-y-3">
@@ -940,11 +1023,11 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
 
                 <div className="flex-1 min-w-0">
                   {isFail && (
-                    <div className="text-xs font-black text-rose-500 mb-1">⚠ โหมด FAIL — สแกนชิ้นงานที่เสีย 1 ชิ้น</div>
+                    <div className="text-xs font-black text-rose-500 mb-1">⚠ โหมด FAIL — ชิ้นถัดไปส่ง FAIL ที่ station นี้</div>
                   )}
                   <div className="flex items-center gap-2">
-                    {isLocked ? statusPill(rt) : <span className="text-[11px] text-gray-400">ยังไม่ Lock</span>}
-                    {rt?.sn && <span className={`text-xs font-mono font-bold truncate ${textMain}`}>{rt.sn}</span>}
+                    {isLocked ? statusPill(rt) : <span className="text-[11px] text-gray-400">ยังไม่ Lock (ไม่ส่ง)</span>}
+                    {isLocked && rt?.sn && <span className={`text-xs font-mono font-bold truncate ${textMain}`}>{rt.sn}</span>}
                   </div>
                   {isLocked && rt?.text && (
                     <div className={`text-[11px] truncate ${rt.status === "error" ? "text-rose-500" : "text-gray-400"}`} title={rt.text}>
@@ -957,7 +1040,7 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
                   type="button"
                   onClick={() => toggleFail(st)}
                   disabled={!isLocked}
-                  title={isLocked ? "ชิ้นถัดไปที่สแกนจะส่งเป็น FAIL" : "ต้อง Lock ก่อน"}
+                  title={isLocked ? "ชิ้นถัดไปที่สแกนจะส่ง FAIL ที่ station นี้" : "ต้อง Lock ก่อน"}
                   className={`px-5 py-2.5 rounded-xl text-xs font-black shrink-0 disabled:opacity-30 disabled:cursor-not-allowed ${
                     isFail ? "bg-rose-600 hover:bg-rose-700 text-white" : "border border-rose-500/60 text-rose-500 hover:bg-rose-500/10"
                   }`}
@@ -998,9 +1081,9 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
               {logs.length === 0 && (
                 <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-400">ยังไม่มีประวัติ</td></tr>
               )}
-              {logs.map((l) => (
-                <tr key={l.id} className={`border-t ${isDarkMode ? "border-slate-700/60" : "border-gray-100"}`}>
-                  <td className="px-4 py-2 whitespace-nowrap">{formatTime(l.created_at)}</td>
+              {logs.map((l, idx) => (
+                <tr key={`${l.time}-${idx}`} className={`border-t ${isDarkMode ? "border-slate-700/60" : "border-gray-100"}`}>
+                  <td className="px-4 py-2 whitespace-nowrap">{l.time}</td>
                   <td className="px-4 py-2 whitespace-nowrap">{l.line} / {l.station}</td>
                   <td className="px-4 py-2">{l.mo}</td>
                   <td className="px-4 py-2 font-mono">{l.sn}</td>

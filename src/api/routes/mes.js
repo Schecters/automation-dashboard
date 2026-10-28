@@ -1,31 +1,24 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import { pool } from '../lib/db.js';
 import { io } from '../lib/realtime.js';
 import { JWT_SECRET } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
-import { recordAuditLog } from '../lib/audit.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { readScan, validateModbusConfig } from '../lib/modbusReader.js';
+import { appendRouteLog, appendLoginLog, readRouteLogs } from '../lib/mesLog.js';
 import { findOperatorExams } from './operatorData.js';
-import {
-  authenticateToken,
-  authenticateMesOperator,
-  requireRoles,
-  MES_OPERATOR_KIND,
-} from '../middleware/auth.js';
+import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
 
 const router = express.Router();
 
 // ==========================================
-// 🏭 MES Update
-//  - operator login ด้วยรหัสพนักงาน (ต้องมีใน automation_lines.operators) token หมดอายุ 07:40 / 19:40
-//  - ช่อง station: Line/Station จาก MES lineinfo, WO จาก MES molist, อ่าน QR จาก Keyence ผ่าน Modbus TCP
-//  - อ่านได้ SN ใหม่ -> ยิง routing-update ไป MES
-//  - แก้ Line / Station / Modbus ได้เฉพาะ ME และ admin (token dashboard)
+// 🏭 MES Update (หน้า /MES) — ไม่ใช้ Database
+//  - operator login ด้วยรหัสพนักงาน ต้องเคยทำข้อสอบ (Excel) token หมดอายุ 07:40 / 19:40
+//  - การตั้งค่าของแต่ละเครื่อง (ชื่อเครื่อง / Modbus / station) เก็บในเบราว์เซอร์ของเครื่องนั้น
+//  - API นี้: ดึง Line/Station/WO จาก MES, อ่านเครื่องสแกนผ่าน Modbus TCP, ยิง routing-update
+//  - ประวัติเขียนเป็นไฟล์ CSV ที่ MES_LOG_DIR (default D:\MES logs)
 // ==========================================
 
-const STAFF_ROLES = ['admin', 'me'];
 const SHIFT_CUTOFFS = [7 * 60 + 40, 19 * 60 + 40]; // 07:40, 19:40 (นาทีของวัน เวลาไทย)
 const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000; // ไทยไม่มี DST
 
@@ -42,7 +35,7 @@ export const nextShiftCutoff = (now = new Date()) => {
   return new Date(now.getTime() + 12 * 3600000); // ไม่ควรมาถึงตรงนี้
 };
 
-// รับได้ทั้ง token operator (MES) และ token dashboard (สำหรับ ME/admin ตอนตั้งค่า)
+// รับได้ทั้ง token operator (MES) และ token dashboard (ME/admin ตอนตั้งค่า)
 const authenticateMesOrStaff = (req, res, next) => {
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -59,8 +52,6 @@ const authenticateMesOrStaff = (req, res, next) => {
   });
 };
 
-const requireStaff = [authenticateToken, requireRoles(...STAFF_ROLES)];
-
 const sendMesError = (res, err, fallback) => {
   if (err instanceof MesError) {
     return res.status(502).json({ success: false, message: `MES: ${err.message}` });
@@ -69,23 +60,13 @@ const sendMesError = (res, err, fallback) => {
   return res.status(500).json({ success: false, message: fallback });
 };
 
-// route ของ ME/admin: แสดงสาเหตุจริงให้เห็นในหน้าเว็บ (คนตั้งค่าแก้ปัญหาเองได้ เช่น ตาราง/คอลัมน์ยังไม่ถูกสร้าง)
-const staffErrorMessage = (msg, err) => `${msg}: ${err?.message || err}`;
-
-const auditStaff = (req, action, target, details) =>
-  recordAuditLog({
-    employeeId: req.user.employee_id,
-    userName: req.user.name,
-    role: req.user.role,
-    deviceId: req.user.device_id,
-    action,
-    target,
-    details,
-    ipAddress: getClientIp(req),
-  });
+const text = (v, max) => {
+  const s = String(v ?? '').trim();
+  return s ? s.slice(0, max) : null;
+};
 
 // ------------------------------------------
-// Operator login
+// Operator login (เช็คจาก Excel คะแนนสอบ)
 // ------------------------------------------
 router.post('/api/mes/operator-login', async (req, res) => {
   const employeeId = String(req.body?.employee_id || '').trim();
@@ -104,38 +85,20 @@ router.post('/api/mes/operator-login', async (req, res) => {
           : 'ไม่พบประวัติการทำข้อสอบของรหัสพนักงานนี้',
       });
     }
-    // ชื่อ: ใช้จาก DB ถ้ามี ไม่งั้นใช้จาก Excel
-    const nameRes = await pool.query(
-      `SELECT name FROM automation_lines.operators WHERE employee_id::text = $1
-       UNION ALL SELECT name FROM auth.users WHERE employee_id::text = $1 LIMIT 1`,
-      [employeeId]
-    );
-    const operator = { employee_id: employeeId, name: nameRes.rows[0]?.name || check.name || '' };
+    const operator = { employee_id: employeeId, name: check.name || '' };
     const expiresAt = nextShiftCutoff();
     const expiresInSec = Math.max(60, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
-    const token = jwt.sign(
-      { kind: MES_OPERATOR_KIND, employee_id: String(operator.employee_id), name: operator.name || '' },
-      JWT_SECRET,
-      { expiresIn: expiresInSec }
-    );
+    const token = jwt.sign({ kind: MES_OPERATOR_KIND, ...operator }, JWT_SECRET, { expiresIn: expiresInSec });
 
-    await recordAuditLog({
-      employeeId: operator.employee_id,
-      userName: operator.name,
-      role: 'operator',
-      deviceId: req.body?.device_id || null,
-      action: 'MES_OPERATOR_LOGIN',
-      target: 'MES Update',
-      details: `Operator #${operator.employee_id} เข้าใช้หน้า MES Update (ข้อสอบที่พบ: ${check.exams.map((e) => e.exam_name).join(', ')}; หมดอายุ ${expiresAt.toISOString()})`,
-      ipAddress: getClientIp(req),
+    await appendLoginLog({
+      emp_no: operator.employee_id,
+      emp_name: operator.name,
+      terminal: text(req.body?.terminal, 100) || '',
+      ip: getClientIp(req),
+      exams: check.exams.map((e) => e.exam_name).join(' / '),
     });
 
-    res.json({
-      success: true,
-      token,
-      expires_at: expiresAt.toISOString(),
-      operator,
-    });
+    res.json({ success: true, token, expires_at: expiresAt.toISOString(), operator });
   } catch (err) {
     console.error('MES Operator Login Error:', err);
     res.status(500).json({ success: false, message: 'เข้าสู่ระบบไม่สำเร็จ' });
@@ -147,20 +110,35 @@ router.get('/api/mes/operator/me', authenticateMesOperator, (req, res) => {
 });
 
 // ------------------------------------------
-// ข้อมูลจาก MES
+// ข้อมูลจาก MES (มี cache สั้น ๆ ไว้ตรวจค่าตอนส่ง)
 // ------------------------------------------
+const LINEINFO_TTL_MS = 5 * 60 * 1000;
+const MOLIST_TTL_MS = 60 * 1000;
+const lineInfoCache = new Map(); // line -> { at, rows }
+let moListCache = null; // { at, rows }
+
+const cachedLineInfo = async (empNo, line) => {
+  const hit = lineInfoCache.get(line);
+  if (hit && Date.now() - hit.at < LINEINFO_TTL_MS) return hit.rows;
+  const rows = await getLineInfo(empNo, line);
+  lineInfoCache.set(line, { at: Date.now(), rows });
+  return rows;
+};
+
+const cachedMoList = async (empNo, line, { fresh = false } = {}) => {
+  if (fresh || !moListCache || Date.now() - moListCache.at >= MOLIST_TTL_MS) {
+    moListCache = { at: Date.now(), rows: await getMoList(empNo) };
+  }
+  return moListCache.rows.filter((r) => String(r.LINE_NAME) === String(line));
+};
+
 router.get('/api/mes/lineinfo', authenticateMesOrStaff, async (req, res) => {
   const line = req.query.line ? String(req.query.line).trim() : 'ALL';
   try {
     const rows = await getLineInfo(req.mesEmpNo, line);
     res.json({
       success: true,
-      data: rows.map((r) => ({
-        line: r.LINE_NAME,
-        section: r.SECTION_NAME,
-        group: r.GROUP_NAME,
-        station: r.STATION_NAME,
-      })),
+      data: rows.map((r) => ({ line: r.LINE_NAME, section: r.SECTION_NAME, group: r.GROUP_NAME, station: r.STATION_NAME })),
     });
   } catch (err) {
     sendMesError(res, err, 'ดึงข้อมูล Line / Station จาก MES ไม่สำเร็จ');
@@ -171,80 +149,27 @@ router.get('/api/mes/molist', authenticateMesOrStaff, async (req, res) => {
   const line = String(req.query.line || '').trim();
   if (!line) return res.status(400).json({ success: false, message: 'กรุณาระบุ Line' });
   try {
-    const rows = await getMoList(req.mesEmpNo, line);
-    res.json({
-      success: true,
-      data: rows.map((r) => ({ mo: r.MO_NUMBER, model: r.MODEL_NAME, line: r.LINE_NAME })),
-    });
+    const rows = await cachedMoList(req.mesEmpNo, line, { fresh: true });
+    res.json({ success: true, data: rows.map((r) => ({ mo: r.MO_NUMBER, model: r.MODEL_NAME, line: r.LINE_NAME })) });
   } catch (err) {
     sendMesError(res, err, 'ดึงรายการ WO จาก MES ไม่สำเร็จ');
   }
 });
 
 // ------------------------------------------
-// ช่อง station
+// อ่านเครื่องสแกนผ่าน Modbus TCP — ค่าตั้งส่งมาจากหน้าเว็บ (เก็บในเครื่องนั้น)
 // ------------------------------------------
-const STATION_COLUMNS = `id, terminal, sort_order, label, line, section_name, group_name, station, mo, model_name,
-  modbus_host, modbus_port, unit_id, register_type, start_address, word_count, byte_order,
-  clear_after_read, updated_by, updated_at`;
-
-const getStation = async (id) => {
-  const r = await pool.query(
-    `SELECT ${STATION_COLUMNS} FROM automation_lines.mes_stations WHERE id = $1 AND is_active = TRUE`,
-    [id]
-  );
-  return r.rows[0] || null;
+// อนุญาตเฉพาะ IP ภายในโรงงาน (กันใช้ server ไปเชื่อมต่อที่อื่น)
+const isPrivateIPv4 = (host) => {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if (m.slice(1).some((x) => Number(x) > 255)) return false;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a === 127;
 };
 
-const emitStations = (type, id) => io.emit('mes_stations_updated', { type, id });
-
-const text = (v, max) => {
-  const s = String(v ?? '').trim();
-  return s ? s.slice(0, max) : null;
-};
-
-// ชื่อเครื่อง: แต่ละเครื่องหน้าไลน์มีชุด station ของตัวเอง (ชื่อเก็บใน localStorage ของเครื่องนั้น)
-const parseTerminal = (v) => text(v, 100);
-
-// station ของเครื่องที่ระบุ ?terminal=
-router.get('/api/mes/stations', authenticateMesOrStaff, async (req, res) => {
-  const terminal = parseTerminal(req.query.terminal);
-  if (!terminal) return res.json({ success: true, data: [] });
-  try {
-    const r = await pool.query(
-      `SELECT ${STATION_COLUMNS} FROM automation_lines.mes_stations
-       WHERE is_active = TRUE AND terminal = $1 ORDER BY sort_order ASC, id ASC`,
-      [terminal]
-    );
-    res.json({ success: true, data: r.rows });
-  } catch (err) {
-    console.error('Fetch MES Stations Error:', err);
-    res.status(500).json({ success: false, message: 'ดึงรายการ station ไม่สำเร็จ' });
-  }
-});
-
-// รายชื่อเครื่องที่มีอยู่ (ไว้เลือกตอนตั้งค่าเครื่องใหม่ / เครื่องที่ล้างข้อมูลเบราว์เซอร์)
-router.get('/api/mes/terminals', authenticateMesOrStaff, async (req, res) => {
-  try {
-    const r = await pool.query(
-      `SELECT terminal, COUNT(*)::int AS station_count, STRING_AGG(DISTINCT line, ', ') AS lines
-       FROM automation_lines.mes_stations WHERE is_active = TRUE
-       GROUP BY terminal ORDER BY terminal`
-    );
-    res.json({ success: true, data: r.rows });
-  } catch (err) {
-    console.error('Fetch MES Terminals Error:', err);
-    res.status(500).json({ success: false, message: 'ดึงรายชื่อเครื่องไม่สำเร็จ' });
-  }
-});
-
-const parseStationBody = (body) => {
-  const data = {
-    label: text(body?.label, 100),
-    line: text(body?.line, 100),
-    section_name: text(body?.section_name, 100),
-    group_name: text(body?.group_name, 100),
-    station: text(body?.station, 100),
+const parseModbusBody = (body) => {
+  const cfg = {
     modbus_host: text(body?.modbus_host, 100),
     modbus_port: Number(body?.modbus_port ?? 502),
     unit_id: Number(body?.unit_id ?? 1),
@@ -254,212 +179,68 @@ const parseStationBody = (body) => {
     byte_order: body?.byte_order === 'LE' ? 'LE' : 'BE',
     clear_after_read: Boolean(body?.clear_after_read),
   };
-  if (!data.line || !data.station) return { error: 'กรุณาเลือก Line และ Station' };
-  const modbusError = validateModbusConfig(data);
-  if (modbusError) return { error: modbusError };
-  return { data };
+  const err = validateModbusConfig(cfg);
+  if (err) return { error: err };
+  if (!isPrivateIPv4(cfg.modbus_host)) return { error: 'IP เครื่องสแกนต้องเป็น IP ภายใน (10.x / 172.16-31.x / 192.168.x)' };
+  return { cfg };
 };
 
-router.post('/api/mes/stations', ...requireStaff, async (req, res) => {
-  const { error, data } = parseStationBody(req.body);
+// operator: อ่านจริง (ล้าง register ตามที่ตั้ง) / ME-admin: ทดสอบ (ไม่ล้าง)
+router.post('/api/mes/modbus/read', authenticateMesOrStaff, async (req, res) => {
+  const { error, cfg } = parseModbusBody(req.body);
   if (error) return res.status(400).json({ success: false, message: error });
-  const terminal = parseTerminal(req.body?.terminal);
-  if (!terminal) return res.status(400).json({ success: false, message: 'กรุณาตั้งชื่อเครื่องนี้ก่อนเพิ่ม station' });
+  if (!req.mesOperator) cfg.clear_after_read = false;
   try {
-    const r = await pool.query(
-      `INSERT INTO automation_lines.mes_stations
-         (terminal, sort_order, label, line, section_name, group_name, station, modbus_host, modbus_port, unit_id,
-          register_type, start_address, word_count, byte_order, clear_after_read, updated_by)
-       VALUES (
-         $15::varchar,
-         (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM automation_lines.mes_stations
-          WHERE is_active = TRUE AND terminal = $15::varchar),
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       RETURNING ${STATION_COLUMNS}`,
-      [data.label, data.line, data.section_name, data.group_name, data.station, data.modbus_host, data.modbus_port,
-        data.unit_id, data.register_type, data.start_address, data.word_count, data.byte_order,
-        data.clear_after_read, req.user.employee_id, terminal]
-    );
-    const row = r.rows[0];
-    await auditStaff(req, 'MES_STATION_CREATE', `MES Station #${row.id}`,
-      `[${terminal}] ${row.line} / ${row.station} -> ${row.modbus_host}:${row.modbus_port}`);
-    emitStations('create', row.id);
-    res.json({ success: true, data: row });
-  } catch (err) {
-    console.error('Create MES Station Error:', err);
-    res.status(500).json({ success: false, message: staffErrorMessage('เพิ่ม station ไม่สำเร็จ', err) });
-  }
-});
-
-// เรียงลำดับบนลงล่าง: body { ids: [3, 1, 2] }
-router.put('/api/mes/stations/order', ...requireStaff, async (req, res) => {
-  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : [];
-  if (ids.length === 0) return res.status(400).json({ success: false, message: 'ไม่มีลำดับที่จะบันทึก' });
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    for (let i = 0; i < ids.length; i++) {
-      await client.query('UPDATE automation_lines.mes_stations SET sort_order = $1 WHERE id = $2', [i + 1, ids[i]]);
-    }
-    await client.query('COMMIT');
-    emitStations('order', null);
-    res.json({ success: true });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('Order MES Stations Error:', err);
-    res.status(500).json({ success: false, message: staffErrorMessage('บันทึกลำดับไม่สำเร็จ', err) });
-  } finally {
-    client.release();
-  }
-});
-
-router.put('/api/mes/stations/:id', ...requireStaff, async (req, res) => {
-  const id = Number(req.params.id);
-  const { error, data } = parseStationBody(req.body);
-  if (error) return res.status(400).json({ success: false, message: error });
-  try {
-    const before = await getStation(id);
-    if (!before) return res.status(404).json({ success: false, message: 'ไม่พบ station นี้' });
-    // เปลี่ยน Line แล้ว WO เดิมใช้ไม่ได้
-    const lineChanged = before.line !== data.line;
-    const r = await pool.query(
-      `UPDATE automation_lines.mes_stations SET
-         label = $1, line = $2, section_name = $3, group_name = $4, station = $5, modbus_host = $6, modbus_port = $7,
-         unit_id = $8, register_type = $9, start_address = $10, word_count = $11, byte_order = $12,
-         clear_after_read = $13, updated_by = $14, updated_at = NOW(),
-         mo = CASE WHEN $15::boolean THEN NULL ELSE mo END,
-         model_name = CASE WHEN $15::boolean THEN NULL ELSE model_name END
-       WHERE id = $16 RETURNING ${STATION_COLUMNS}`,
-      [data.label, data.line, data.section_name, data.group_name, data.station, data.modbus_host, data.modbus_port,
-        data.unit_id, data.register_type, data.start_address, data.word_count, data.byte_order,
-        data.clear_after_read, req.user.employee_id, lineChanged, id]
-    );
-    const row = r.rows[0];
-    await auditStaff(req, 'MES_STATION_UPDATE', `MES Station #${id}`,
-      `${before.line}/${before.station} ${before.modbus_host}:${before.modbus_port} -> ` +
-      `${row.line}/${row.station} ${row.modbus_host}:${row.modbus_port}`);
-    emitStations('update', id);
-    res.json({ success: true, data: row });
-  } catch (err) {
-    console.error('Update MES Station Error:', err);
-    res.status(500).json({ success: false, message: staffErrorMessage('แก้ไข station ไม่สำเร็จ', err) });
-  }
-});
-
-router.delete('/api/mes/stations/:id', ...requireStaff, async (req, res) => {
-  const id = Number(req.params.id);
-  try {
-    const r = await pool.query(
-      `UPDATE automation_lines.mes_stations SET is_active = FALSE, updated_by = $1, updated_at = NOW()
-       WHERE id = $2 AND is_active = TRUE RETURNING line, station`,
-      [req.user.employee_id, id]
-    );
-    if (r.rowCount === 0) return res.status(404).json({ success: false, message: 'ไม่พบ station นี้' });
-    await auditStaff(req, 'MES_STATION_DELETE', `MES Station #${id}`, `${r.rows[0].line} / ${r.rows[0].station}`);
-    emitStations('delete', id);
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Delete MES Station Error:', err);
-    res.status(500).json({ success: false, message: staffErrorMessage('ลบ station ไม่สำเร็จ', err) });
-  }
-});
-
-// ทดลองอ่านเครื่องสแกนด้วยค่าที่กรอกในฟอร์ม (ยังไม่บันทึก)
-router.post('/api/mes/modbus/test', ...requireStaff, async (req, res) => {
-  const cfg = {
-    modbus_host: text(req.body?.modbus_host, 100),
-    modbus_port: Number(req.body?.modbus_port ?? 502),
-    unit_id: Number(req.body?.unit_id ?? 1),
-    register_type: req.body?.register_type === 'input' ? 'input' : 'holding',
-    start_address: Number(req.body?.start_address ?? 0),
-    word_count: Number(req.body?.word_count ?? 20),
-    byte_order: req.body?.byte_order === 'LE' ? 'LE' : 'BE',
-    clear_after_read: false,
-  };
-  const modbusError = validateModbusConfig(cfg);
-  if (modbusError) return res.status(400).json({ success: false, message: modbusError });
-  try {
-    const { text: value, raw } = await readScan(cfg);
-    res.json({ success: true, value, raw });
+    const { text: sn, raw } = await readScan(cfg);
+    res.json({ success: true, sn, raw });
   } catch (err) {
     res.status(502).json({ success: false, message: `อ่าน Modbus ไม่ได้: ${err.message}` });
   }
 });
 
 // ------------------------------------------
-// Operator: เลือก WO / อ่านสแกน / ยิง routing-update
+// ยิง routing-update ให้ 1 station (หน้าเว็บเรียกทีละ station ตามลำดับบนลงล่าง)
 // ------------------------------------------
-router.patch('/api/mes/stations/:id/mo', authenticateMesOrStaff, async (req, res) => {
-  const id = Number(req.params.id);
-  const mo = text(req.body?.mo, 50);
-  try {
-    const st = await getStation(id);
-    if (!st) return res.status(404).json({ success: false, message: 'ไม่พบ station นี้' });
+const lastSent = new Map(); // `${line}|${station}` -> { sn, result } กันส่งซ้ำ
 
-    let modelName = null;
-    if (mo) {
-      // ยืนยันกับ MES ว่า WO นี้มีอยู่จริงใน Line นี้ และใช้ MODEL_NAME จาก MES
-      const list = await getMoList(req.mesEmpNo, st.line);
-      const found = list.find((r) => String(r.MO_NUMBER) === mo);
-      if (!found) return res.status(400).json({ success: false, message: `ไม่พบ WO ${mo} ของ Line ${st.line} ใน MES` });
-      modelName = found.MODEL_NAME || null;
-    }
-    const r = await pool.query(
-      `UPDATE automation_lines.mes_stations SET mo = $1, model_name = $2, updated_by = $3, updated_at = NOW()
-       WHERE id = $4 RETURNING ${STATION_COLUMNS}`,
-      [mo, modelName, req.mesEmpNo, id]
-    );
-    emitStations('mo', id);
-    res.json({ success: true, data: r.rows[0] });
-  } catch (err) {
-    sendMesError(res, err, 'เปลี่ยน WO ไม่สำเร็จ');
-  }
-});
-
-router.post('/api/mes/stations/:id/read', authenticateMesOperator, async (req, res) => {
-  try {
-    const st = await getStation(Number(req.params.id));
-    if (!st) return res.status(404).json({ success: false, message: 'ไม่พบ station นี้' });
-    const { text: sn } = await readScan(st);
-    res.json({ success: true, sn });
-  } catch (err) {
-    res.status(502).json({ success: false, message: `อ่านเครื่องสแกนไม่ได้: ${err.message}` });
-  }
-});
-
-router.post('/api/mes/stations/:id/update-route', authenticateMesOperator, async (req, res) => {
-  const id = Number(req.params.id);
-  // "}" เป็นตัวคั่นของ MES -> ตัดออกตั้งแต่ต้น ให้ SN ใน log / การกันซ้ำ ตรงกับที่ส่งไปจริง
+router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) => {
   const sn = text(String(req.body?.sn ?? '').replace(/[}\r\n\t]/g, ''), 200);
-  if (!sn) return res.status(400).json({ success: false, message: 'ไม่มี Serial Number' });
-  // ผลของชิ้นงาน: ปกติ PASS, กดปุ่ม FAIL ในหน้าเว็บแล้วสแกน = FAIL
   const result = String(req.body?.result || 'PASS').toUpperCase();
+  const line = text(req.body?.line, 100);
+  const stationName = text(req.body?.station, 100);
+  const mo = text(req.body?.mo, 50);
+  const terminal = text(req.body?.terminal, 100) || '';
+  if (!sn) return res.status(400).json({ success: false, message: 'ไม่มี Serial Number' });
   if (!ROUTING_RESULTS.includes(result)) return res.status(400).json({ success: false, message: 'ผลต้องเป็น PASS หรือ FAIL' });
+  if (!line || !stationName) return res.status(400).json({ success: false, message: 'ไม่มี Line / Station' });
+  if (!mo) return res.status(400).json({ success: false, message: 'กรุณาเลือก WO ของ station นี้ก่อน' });
+
+  const key = `${line}|${stationName}`;
+  const prev = lastSent.get(key);
+  if (prev?.sn === sn && prev?.result === result) {
+    return res.json({ success: true, skipped: true, result, message: `SN นี้ส่ง ${result} ไปแล้ว` });
+  }
 
   try {
-    const st = await getStation(id);
-    if (!st) return res.status(404).json({ success: false, message: 'ไม่พบ station นี้' });
-    if (!st.mo) return res.status(400).json({ success: false, message: 'กรุณาเลือก WO ของ station นี้ก่อน' });
-
-    // กันยิงซ้ำ: SN + ผลเดิม ที่เพิ่ง update สำเร็จที่ station นี้ (PASS แล้วสแกนซ้ำเป็น FAIL ได้)
-    const last = await pool.query(
-      `SELECT sn, COALESCE(result, 'PASS') AS result FROM automation_lines.mes_update_logs
-       WHERE mes_station_id = $1 AND success = TRUE ORDER BY created_at DESC, id DESC LIMIT 1`,
-      [id]
+    // ยืนยัน Station / WO กับ MES และใช้ SECTION / GROUP / MODEL จาก MES (ไม่เชื่อค่าจากหน้าเว็บ)
+    const empNo = req.mesOperator.employee_id;
+    const st = (await cachedLineInfo(empNo, line)).find(
+      (r) => r.STATION_NAME === stationName && (!req.body?.group || r.GROUP_NAME === req.body.group)
     );
-    if (last.rows[0]?.sn === sn && last.rows[0]?.result === result) {
-      return res.json({ success: true, skipped: true, result, message: `SN นี้ส่ง ${result} ไปแล้ว` });
-    }
+    if (!st) return res.status(400).json({ success: false, message: `ไม่พบ Station ${stationName} ของ Line ${line} ใน MES` });
+    let moRow = (await cachedMoList(empNo, line)).find((r) => String(r.MO_NUMBER) === mo);
+    if (!moRow) moRow = (await cachedMoList(empNo, line, { fresh: true })).find((r) => String(r.MO_NUMBER) === mo);
+    if (!moRow) return res.status(400).json({ success: false, message: `ไม่พบ WO ${mo} ของ Line ${line} ใน MES` });
 
     const row = buildRoutingRow({
       sn,
-      mo: st.mo,
-      model: st.model_name,
-      line: st.line,
-      section: st.section_name,
-      group: st.group_name,
-      station: st.station,
-      empNo: req.mesOperator.employee_id,
+      mo,
+      model: moRow.MODEL_NAME,
+      line,
+      section: st.SECTION_NAME,
+      group: st.GROUP_NAME,
+      station: st.STATION_NAME,
+      empNo,
       result,
     });
 
@@ -471,52 +252,49 @@ router.post('/api/mes/stations/:id/update-route', authenticateMesOperator, async
       success = true;
       responseText = mesRes.text;
       message = `ส่ง ${result} สำเร็จ`;
+      lastSent.set(key, { sn, result });
     } catch (err) {
       responseText = err.body ? JSON.stringify(err.body) : err.message;
       message = err.message;
     }
 
-    const log = await pool.query(
-      `INSERT INTO automation_lines.mes_update_logs (mes_station_id, emp_no, emp_name, line, station, mo, sn, result, success, mes_response)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [id, req.mesOperator.employee_id, req.mesOperator.name || null, st.line, st.station, st.mo, sn, result, success,
-        `${row}\n=> ${responseText}`.slice(0, 4000)]
-    );
-    io.emit('mes_updated', { station_id: id, success });
+    const log = await appendRouteLog({
+      terminal,
+      emp_no: empNo,
+      emp_name: req.mesOperator.name,
+      line,
+      section: st.SECTION_NAME,
+      group: st.GROUP_NAME,
+      station: st.STATION_NAME,
+      mo,
+      model: moRow.MODEL_NAME,
+      sn,
+      result,
+      success,
+      mes_response: `${row} => ${responseText}`.slice(0, 2000),
+    });
+    io.emit('mes_updated', { terminal, success });
 
     res.status(success ? 200 : 502).json({
       success,
       result,
-      message,
+      message: log.ok ? message : `${message} (แต่เขียนไฟล์ log ไม่ได้: ${log.error})`,
       mes_response: responseText,
-      log: log.rows[0],
     });
   } catch (err) {
-    console.error('MES Update Route Error:', err);
-    res.status(500).json({ success: false, message: 'Update route ไม่สำเร็จ' });
+    sendMesError(res, err, 'Update route ไม่สำเร็จ');
   }
 });
 
+// ประวัติล่าสุดของเครื่อง (จากไฟล์ CSV วันนี้ + เมื่อวาน)
 router.get('/api/mes/logs', authenticateMesOrStaff, async (req, res) => {
-  const stationId = req.query.station_id ? Number(req.query.station_id) : null;
-  const terminal = parseTerminal(req.query.terminal);
-  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500);
+  const terminal = text(req.query.terminal, 100);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 200);
   try {
-    const r = await pool.query(
-      `SELECT l.id, l.mes_station_id, l.emp_no, l.emp_name, l.line, l.station, l.mo, l.sn, COALESCE(l.result, 'PASS') AS result, l.success,
-              l.mes_response, l.created_at
-       FROM automation_lines.mes_update_logs l
-       LEFT JOIN automation_lines.mes_stations s ON s.id = l.mes_station_id
-       WHERE ($1::int IS NULL OR l.mes_station_id = $1::int)
-         AND ($3::text IS NULL OR s.terminal = $3::text)
-       ORDER BY l.created_at DESC, l.id DESC
-       LIMIT $2`,
-      [stationId, limit, terminal]
-    );
-    res.json({ success: true, data: r.rows });
+    res.json({ success: true, data: await readRouteLogs({ terminal, limit }) });
   } catch (err) {
-    console.error('Fetch MES Logs Error:', err);
-    res.status(500).json({ success: false, message: 'ดึงประวัติไม่สำเร็จ' });
+    console.error('Read MES Logs Error:', err);
+    res.status(500).json({ success: false, message: 'อ่านประวัติไม่สำเร็จ' });
   }
 });
 

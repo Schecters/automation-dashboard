@@ -22,6 +22,8 @@ if (!JWT_SECRET || JWT_SECRET.length < 32 || JWT_SECRET === 'super_secret_jwt_ke
 
 // 🏭 MES API (หน้า MES Update) — ไม่ใช่ความลับ จึงมีค่า default ได้ เปลี่ยนได้ใน .env
 export const MES_API_BASE = (process.env.MES_API_BASE || 'http://10.204.212.22:5207').replace(/\/+$/, '');
+// ประวัติการส่ง MES เก็บเป็นไฟล์ CSV ที่นี่ (ไม่ใช้ Database)
+export const MES_LOG_DIR = path.resolve(process.env.MES_LOG_DIR || 'D:/MES logs');
 
 // ==========================================
 // 📁 เตรียมโฟลเดอร์สำหรับจัดเก็บไฟล์

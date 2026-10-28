@@ -21,7 +21,6 @@ const StepCustom = lazy(() => import("../components/dashboard/StepCustom"));
 const Api = lazy(() => import("../components/dashboard/ApiDocContent")); // 🟢 Api
 const DailyCheckList = lazy(() => import("../components/dashboard/DailyCheckList"));
 const PmChecklistBuilder = lazy(() => import("../components/dashboard/PmChecklistBuilder"));
-const MesUpdate = lazy(() => import("../components/mes/MesUpdate"));
 
 // 🟢 Common
 import NotificationBell from "../components/common/NotificationBell";
@@ -232,18 +231,6 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         ),
       },
       {
-        id: "mes_update",
-        label: "MES Update",
-        category: "Production Control",
-        // operator login ด้วยรหัสพนักงานในหน้าเอง (หรือเปิด /MES แบบเต็มจอ) การตั้งค่าแก้ได้เฉพาะ ME/admin
-        roles: ["admin", "me", "ie", "pd", "q", "view"],
-        icon: (
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-          </svg>
-        ),
-      },
-      {
         id: "layout",
         label: "Layout Editor",
         category: "Production Control",
@@ -440,8 +427,6 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         return <DailyCheckList isDarkMode={isDarkMode} />;
       case "pm_create":
         return <PmChecklistBuilder isDarkMode={isDarkMode} />;
-      case "mes_update":
-        return <MesUpdate isDarkMode={isDarkMode} embedded />;
       default:
         return null;
     }

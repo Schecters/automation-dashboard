@@ -26,7 +26,7 @@ export default function MesLogin({ onLoggedIn, onOpenSettings, message, terminal
     if (!id || loading) return;
     setLoading(true);
     setError("");
-    const { auth, error: err } = await operatorLogin(id);
+    const { auth, error: err } = await operatorLogin(id, terminal || "");
     setLoading(false);
     if (err) {
       setError(err);

@@ -79,12 +79,16 @@ git push
 - Daily PM Checklist: API `src/api/routes/pmChecklist.js`, ตาราง `automation_lines.pm_*` (สร้างอัตโนมัติใน `db.js`)
   - หน้า `DailyCheckList.jsx` (กรอก/ประวัติ/อนุมัติ) และ `PmChecklistBuilder.jsx` (สร้างแม่แบบ: admin, me)
   - ผู้อนุมัติ: ตำแหน่ง Line (owner/leader/supervisor จาก `line_owners`) หรือ role (me/ie/q/pd/admin), Admin อนุมัติแทนได้ทุกขั้น
-- MES Update: หน้า `src/components/mes/MesUpdate.jsx` (เมนู "MES Update" หรือเปิดเต็มจอที่ `https://10.204.206.1:5173/MES` (หน้า login `src/pages/MesLogin.jsx`)), API `src/api/routes/mes.js`
+- MES Update: เปิดที่ `https://10.204.206.1:5173/MES` เท่านั้น (ไม่มีเมนูใน dashboard) หน้า login `src/pages/MesLogin.jsx`,
+  หน้าใช้งาน `src/components/mes/MesUpdate.jsx`, API `src/api/routes/mes.js` — **ไม่ใช้ Database**
   - operator login ด้วยรหัสพนักงาน ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดก็ได้ใน `auth.excel_configs`
     ฟังก์ชัน `findOperatorExams` ใน `operatorData.js`, เรียกตรงได้ที่ `/api/operator-exam-check?employee_id=`)
     ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
     รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1` (`buildRoutingRow`) ปกติ PASS, กดปุ่ม FAIL แล้วสแกน = FAIL
-  - อ่าน QR จาก Keyence ผ่าน Modbus TCP (`src/api/lib/modbusReader.js`, package `modbus-serial`) ตั้งค่า IP/register ต่อ station
-  - ตาราง `automation_lines.mes_stations`, `automation_lines.mes_update_logs` / แก้ station ได้เฉพาะ ME, admin
-  - แต่ละเครื่องมีชุด station ของตัวเอง: คอลัมน์ `mes_stations.terminal` = ชื่อเครื่องที่เก็บใน localStorage `mesTerminal`
+  - อ่าน QR จาก Keyence ผ่าน Modbus TCP (`src/api/lib/modbusReader.js`, package `modbus-serial`) ตั้งครั้งเดียวต่อเครื่อง (IP ภายในเท่านั้น)
+    สแกน 1 ครั้ง → ส่งให้ทุก station ที่ Lock ตามลำดับบนลงล่าง (หยุดเมื่อ station ใดไม่สำเร็จ หรือส่ง FAIL แล้ว)
+  - การตั้งค่าของแต่ละเครื่อง เก็บในเบราว์เซอร์เครื่องนั้น: `mesTerminal` (ชื่อเครื่อง), `mesModbus`, `mesStations`
+    แก้ได้เฉพาะ ME, admin (หน้าตั้งค่าต้อง login) / ล้างข้อมูลเบราว์เซอร์ = ต้องตั้งค่าใหม่
+  - ประวัติการส่ง: ไฟล์ CSV ที่ `MES_LOG_DIR` (default `D:\MES logs`) — `YYYY-MM-DD.csv` และ `login_YYYY-MM.csv` (`src/api/lib/mesLog.js`)
+  - ตาราง `automation_lines.mes_*` ที่เคยสร้างไว้รุ่นก่อน เลิกใช้แล้ว (ลบได้)

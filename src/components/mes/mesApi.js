@@ -4,12 +4,12 @@ import { deviceId } from "../../socket";
 const API_URL = "/api";
 
 // คืน { auth } เมื่อสำเร็จ หรือ { error }
-export const operatorLogin = async (employeeId) => {
+export const operatorLogin = async (employeeId, terminal = "") => {
   try {
     const res = await fetch(`${API_URL}/mes/operator-login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ employee_id: employeeId, device_id: deviceId }),
+      body: JSON.stringify({ employee_id: employeeId, device_id: deviceId, terminal }),
     });
     const data = await res.json().catch(() => ({}));
     if (!data.success) return { error: data.message || `เข้าสู่ระบบไม่สำเร็จ (HTTP ${res.status})` };
