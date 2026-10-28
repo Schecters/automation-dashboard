@@ -10,20 +10,43 @@
 //
 //  ข้อความในหน้าต่าง console เป็นภาษาอังกฤษ (cmd บางเครื่องแสดงภาษาไทยไม่ได้)
 //  ใช้แค่ Node.js (ไม่มี package ต้องติดตั้ง)  รัน: node mes-bridge.cjs
-//  ตั้งค่าเพิ่มได้ด้วย environment variable:
-//   MES_BRIDGE_PORT     (default 18080)
-//   MES_BRIDGE_ORIGINS  เว็บที่อนุญาตให้เรียก คั่นด้วย , (default https://10.204.206.1:5173)
+//
+//  แชร์เครื่องสแกนให้ PC อื่น (Keyence ต่อแค่ 1 connection จาก PC1, PC อื่นอ่านผ่าน Bridge ของ PC1):
+//   PC1 (ต่อ Keyence)  mes-bridge.config.json: { "shareTo": ["192.168.1.92"], "peerPort": 18081 }
+//   PC2 (อ่านผ่าน PC1) mes-bridge.config.json: { "upstream": "192.168.1.91:18081" }
+//
+//  ตั้งค่าในไฟล์ mes-bridge.config.json (โฟลเดอร์เดียวกัน) หรือ environment variable:
+//   port      / MES_BRIDGE_PORT       port ของหน้าเว็บบนเครื่องนี้ (default 18080, ฟังแค่ 127.0.0.1)
+//   origins   / MES_BRIDGE_ORIGINS    เว็บที่อนุญาตให้เรียก (default https://10.204.206.1:5173)
+//   shareTo   / MES_BRIDGE_SHARE_TO   IP ของ PC อื่นที่ให้อ่านผ่านเครื่องนี้ (ว่าง = ไม่แชร์)
+//   peerPort  / MES_BRIDGE_PEER_PORT  port ที่เปิดให้ PC อื่น (default 18081)
+//   upstream  / MES_BRIDGE_UPSTREAM   "IP:port" ของ Bridge ที่ต่อ Keyence อยู่ (ตั้ง = เครื่องนี้ไม่ต่อ Keyence เอง)
 // ==========================================
 const http = require('http');
 const net = require('net');
+const fs = require('fs');
+const path = require('path');
 
-const VERSION = '1.0.0';
-const PORT = Number(process.env.MES_BRIDGE_PORT || 18080);
-const ALLOWED_ORIGINS = (process.env.MES_BRIDGE_ORIGINS ||
-  'https://10.204.206.1:5173,https://localhost:5173,http://localhost:5173')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const VERSION = '1.1.0';
+
+const CONFIG_FILE = path.join(__dirname, 'mes-bridge.config.json');
+let fileConfig = {};
+if (fs.existsSync(CONFIG_FILE)) {
+  try {
+    fileConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8').replace(/^﻿/, ''));
+  } catch (err) {
+    console.error(`[ERROR] Cannot read ${CONFIG_FILE}: ${err.message}`);
+    process.exit(1);
+  }
+}
+const listOf = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((s) => String(s).trim()).filter(Boolean);
+
+const PORT = Number(process.env.MES_BRIDGE_PORT || fileConfig.port || 18080);
+const ALLOWED_ORIGINS = listOf(process.env.MES_BRIDGE_ORIGINS || fileConfig.origins ||
+  'https://10.204.206.1:5173,https://localhost:5173,http://localhost:5173');
+const SHARE_TO = listOf(process.env.MES_BRIDGE_SHARE_TO || fileConfig.shareTo);
+const PEER_PORT = Number(process.env.MES_BRIDGE_PEER_PORT || fileConfig.peerPort || 18081);
+const UPSTREAM = String(process.env.MES_BRIDGE_UPSTREAM || fileConfig.upstream || '').trim();
 
 const log = (...args) => console.log(new Date().toLocaleString('sv-SE'), ...args);
 
@@ -350,11 +373,81 @@ const readBody = (req) =>
     req.on('error', reject);
   });
 
+// ------------------------------------------
+// อ่านเครื่องสแกน (ใช้ทั้งหน้าเว็บบนเครื่องนี้ และ PC อื่นที่อ่านผ่านเครื่องนี้)
+// ------------------------------------------
+const readScanner = async (pathname, b) => {
+  if (pathname === '/tcp/read') {
+    const host = String(b.host || '').trim();
+    const port = Number(b.port ?? 9004);
+    const after = b.after === null || b.after === undefined ? null : Number(b.after);
+    if (!isPrivateIPv4(host)) throw new Error('IP เครื่องสแกนต้องเป็น IP ภายใน (10.x / 172.16-31.x / 192.168.x)');
+    if (!validPort(port)) throw new Error('Port ไม่ถูกต้อง');
+    if (after !== null && !Number.isInteger(after)) throw new Error('after ไม่ถูกต้อง');
+    return tcpRead({ host, port, after });
+  }
+  // /modbus/read
+  const cfg = parseModbusCfg(b);
+  try {
+    return await modbusRead(cfg);
+  } finally {
+    // ทดสอบจากหน้าตั้งค่า: อ่านเสร็จปิดทันที ไม่ถือ connection ไว้
+    if (b.close) closeModbusConn(`${cfg.host}:${cfg.port}`, 'test done');
+  }
+};
+
+// เครื่องนี้ตั้ง upstream: ส่งคำขอต่อไปให้ Bridge ของ PC ที่ต่อ Keyence (ไม่ต่อ Keyence เอง)
+const UPSTREAM_TIMEOUT_MS = 6000;
+const forwardUpstream = (pathname, body) =>
+  new Promise((resolve, reject) => {
+    const [upHost, upPort] = UPSTREAM.split(':');
+    const data = JSON.stringify(body);
+    const req = http.request(
+      {
+        host: upHost,
+        port: Number(upPort || 18081),
+        path: pathname,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+        timeout: UPSTREAM_TIMEOUT_MS,
+      },
+      (res) => {
+        let out = '';
+        res.on('data', (c) => {
+          out += c;
+        });
+        res.on('end', () => {
+          try {
+            const j = JSON.parse(out);
+            if (!j.success) return reject(new Error(`[${UPSTREAM}] ${j.message}`));
+            resolve(j);
+          } catch {
+            reject(new Error(`Bridge ${UPSTREAM} ตอบกลับไม่ถูกต้อง`));
+          }
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('ไม่ตอบภายในเวลาที่กำหนด')));
+    req.on('error', (err) => reject(new Error(`ต่อ Bridge ของ PC ที่ต่อเครื่องสแกน (${UPSTREAM}) ไม่ได้: ${err.message}`)));
+    req.end(data);
+  });
+
+const handleRead = async (pathname, body) => {
+  if (UPSTREAM) {
+    const { success, ...rest } = await forwardUpstream(pathname, { ...body, close: false });
+    return rest;
+  }
+  return readScanner(pathname, body);
+};
+
+// ------------------------------------------
+// HTTP สำหรับหน้าเว็บบนเครื่องนี้ (ฟังแค่ 127.0.0.1)
+// ------------------------------------------
 const server = http.createServer(async (req, res) => {
   setCors(req, res);
   const origin = req.headers.origin;
   if (origin && !ALLOWED_ORIGINS.includes(origin)) {
-    return sendJson(res, 403, { success: false, message: `ไม่อนุญาตเว็บ ${origin} (ตั้งใน MES_BRIDGE_ORIGINS)` });
+    return sendJson(res, 403, { success: false, message: `ไม่อนุญาตเว็บ ${origin} (ตั้งใน origins ของ mes-bridge.config.json)` });
   }
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -363,30 +456,15 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   try {
     if (req.method === 'GET' && url.pathname === '/health') {
-      return sendJson(res, 200, { success: true, name: 'mes-bridge', version: VERSION });
+      return sendJson(res, 200, { success: true, name: 'mes-bridge', version: VERSION, upstream: UPSTREAM || null });
     }
-    if (req.method === 'POST' && url.pathname === '/tcp/read') {
-      const b = await readBody(req);
-      const host = String(b.host || '').trim();
-      const port = Number(b.port ?? 9004);
-      const after = b.after === null || b.after === undefined ? null : Number(b.after);
-      if (!isPrivateIPv4(host)) throw new Error('IP เครื่องสแกนต้องเป็น IP ภายใน (10.x / 172.16-31.x / 192.168.x)');
-      if (!validPort(port)) throw new Error('Port ไม่ถูกต้อง');
-      if (after !== null && !Number.isInteger(after)) throw new Error('after ไม่ถูกต้อง');
-      return sendJson(res, 200, { success: true, ...(await tcpRead({ host, port, after })) });
-    }
-    if (req.method === 'POST' && url.pathname === '/modbus/read') {
+    if (req.method === 'POST' && (url.pathname === '/tcp/read' || url.pathname === '/modbus/read')) {
       const body = await readBody(req);
-      const cfg = parseModbusCfg(body);
-      try {
-        return sendJson(res, 200, { success: true, ...(await modbusRead(cfg)) });
-      } finally {
-        // ทดสอบจากหน้าตั้งค่า: อ่านเสร็จปิดทันที ไม่ถือ connection ไว้
-        if (body.close) closeModbusConn(`${cfg.host}:${cfg.port}`, 'test done');
-      }
+      return sendJson(res, 200, { success: true, ...(await handleRead(url.pathname, body)) });
     }
     // หน้าเว็บเลิกใช้ (Unlock / ปิดหน้า / เปลี่ยนการตั้งค่า) -> ปิด connection ทันที ให้เครื่องอื่นต่อได้
-    // body { host, port } หรือ {} = ปิดทั้งหมด (รับ text/plain จาก navigator.sendBeacon ด้วย)
+    // body { host, port } หรือ {} = ปิดทั้งหมด
+    // (เครื่องที่ใช้ upstream ไม่ปิดฝั่ง PC1 เพราะหน้าเว็บของ PC1 อาจยังใช้อยู่ — PC1 ปิดเองเมื่อไม่มีใครถาม)
     if (req.method === 'POST' && url.pathname === '/disconnect') {
       const b = await readBody(req);
       const host = String(b.host || '').trim();
@@ -402,17 +480,56 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.on('error', (err) => {
+// ------------------------------------------
+// HTTP สำหรับ PC อื่นที่อ่านเครื่องสแกนผ่านเครื่องนี้ (เปิดเมื่อตั้ง shareTo, รับเฉพาะ IP ที่ระบุ)
+// ------------------------------------------
+const remoteIp = (req) => String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+
+const peerServer = SHARE_TO.length
+  ? http.createServer(async (req, res) => {
+      const ip = remoteIp(req);
+      if (!SHARE_TO.includes(ip)) {
+        log(`[WARN] Rejected peer ${ip} (not in shareTo)`);
+        return sendJson(res, 403, { success: false, message: `PC ${ip} ไม่ได้รับอนุญาต (เพิ่มใน shareTo ของ PC ที่ต่อเครื่องสแกน)` });
+      }
+      const url = new URL(req.url, 'http://127.0.0.1');
+      try {
+        if (req.method === 'GET' && url.pathname === '/health') {
+          return sendJson(res, 200, { success: true, name: 'mes-bridge', version: VERSION });
+        }
+        if (req.method === 'POST' && (url.pathname === '/tcp/read' || url.pathname === '/modbus/read')) {
+          const body = await readBody(req);
+          // PC อื่นอ่านอย่างเดียว: ไม่ล้าง register (กันหน้าเว็บของเครื่องนี้พลาดค่า) และไม่สั่งปิด connection
+          return sendJson(res, 200, { success: true, ...(await readScanner(url.pathname, { ...body, clear_after_read: false, close: false })) });
+        }
+        return sendJson(res, 404, { success: false, message: 'ไม่พบ endpoint' });
+      } catch (err) {
+        return sendJson(res, 502, { success: false, message: err.message });
+      }
+    })
+  : null;
+
+const exitOnListenError = (port) => (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`[ERROR] Port ${PORT} is already in use (MES Bridge already running?)`);
+    console.error(`[ERROR] Port ${port} is already in use (MES Bridge already running?)`);
   } else {
     console.error('[ERROR]', err.message);
   }
   process.exit(1);
-});
+};
 
+server.on('error', exitOnListenError(PORT));
 server.listen(PORT, '127.0.0.1', () => {
   log(`[OK] MES Bridge ${VERSION} is running at http://127.0.0.1:${PORT}`);
   log(`     Allowed web: ${ALLOWED_ORIGINS.join(', ')}`);
+  if (UPSTREAM) log(`     Reading scanner through Bridge at ${UPSTREAM} (this PC does not connect to the scanner)`);
   log('     Keep this window open while using the MES Update page.');
 });
+
+if (peerServer) {
+  peerServer.on('error', exitOnListenError(PEER_PORT));
+  peerServer.listen(PEER_PORT, '0.0.0.0', () => {
+    log(`[OK] Sharing scanner to other PCs on port ${PEER_PORT}: ${SHARE_TO.join(', ')}`);
+    log('     (Windows Firewall must allow inbound TCP port ' + PEER_PORT + ')');
+  });
+}
