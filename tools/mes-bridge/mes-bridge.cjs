@@ -8,6 +8,7 @@
 //   - TCP data port (เช่น Keyence 9004): ต่อค้างไว้ รับผลอ่านทุกครั้งที่สแกน (ชิ้นเดิมซ้ำก็นับ)
 //   - Modbus TCP: อ่าน holding / input register ที่เก็บ QR เป็น ASCII
 //
+//  ข้อความในหน้าต่าง console เป็นภาษาอังกฤษ (cmd บางเครื่องแสดงภาษาไทยไม่ได้)
 //  ใช้แค่ Node.js (ไม่มี package ต้องติดตั้ง)  รัน: node mes-bridge.cjs
 //  ตั้งค่าเพิ่มได้ด้วย environment variable:
 //   MES_BRIDGE_PORT     (default 18080)
@@ -58,7 +59,7 @@ const createTcpReader = (host, port) => {
       r.connected = true;
       r.lastError = null;
       socket.setTimeout(0);
-      log(`TCP ต่อ ${host}:${port} แล้ว`);
+      log(`[OK] TCP connected ${host}:${port}`);
     });
     socket.on('timeout', () => {
       if (!r.connected) socket.destroy(new Error('เชื่อมต่อไม่ทันเวลา'));
@@ -78,14 +79,14 @@ const createTcpReader = (host, port) => {
         r.seq += 1;
         r.items.push({ seq: r.seq, sn: line, at: new Date().toISOString() });
         if (r.items.length > TCP_MAX_ITEMS) r.items.shift();
-        log(`สแกน ${host}:${port} -> ${line}`);
+        log(`[SCAN] ${host}:${port} -> ${line}`);
       }
     });
     socket.on('error', (err) => {
       r.lastError = err.message;
     });
     socket.on('close', () => {
-      if (r.connected) log(`TCP ${host}:${port} หลุด จะต่อใหม่`);
+      if (r.connected) log(`[WARN] TCP ${host}:${port} disconnected, reconnecting...`);
       r.connected = false;
       r.socket = null;
       if (!r.closed) r.timer = setTimeout(connect, TCP_RECONNECT_MS);
@@ -106,7 +107,7 @@ setInterval(() => {
     if (Date.now() - r.lastPollAt > TCP_IDLE_CLOSE_MS) {
       r.close();
       tcpReaders.delete(key);
-      log(`ปิด TCP ${key} (ไม่มีหน้าเว็บใช้)`);
+      log(`[INFO] TCP ${key} closed (not used by web page)`);
     }
   }
 }, 60000).unref();
@@ -351,15 +352,15 @@ const server = http.createServer(async (req, res) => {
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} ถูกใช้อยู่ (เปิด MES Bridge ซ้ำอยู่แล้ว?)`);
+    console.error(`[ERROR] Port ${PORT} is already in use (MES Bridge already running?)`);
   } else {
-    console.error('❌', err.message);
+    console.error('[ERROR]', err.message);
   }
   process.exit(1);
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  log(`✅ MES Bridge ${VERSION} พร้อมที่ http://127.0.0.1:${PORT}`);
-  log(`   อนุญาตเว็บ: ${ALLOWED_ORIGINS.join(', ')}`);
-  log('   เปิดหน้าต่างนี้ค้างไว้ระหว่างใช้หน้า MES Update');
+  log(`[OK] MES Bridge ${VERSION} is running at http://127.0.0.1:${PORT}`);
+  log(`     Allowed web: ${ALLOWED_ORIGINS.join(', ')}`);
+  log('     Keep this window open while using the MES Update page.');
 });
