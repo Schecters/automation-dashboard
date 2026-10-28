@@ -36,3 +36,6 @@ src/assets/*
 *.njsproj
 *.sln
 *.sw?
+
+# MES Bridge: node.exe ที่ก็อปไปวางให้ PC หน้าไลน์ (ไฟล์ใหญ่ ไม่ขึ้น git)
+tools/mes-bridge/node.exe
