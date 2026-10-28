@@ -7,6 +7,7 @@ import { getClientIp } from '../lib/clientIp.js';
 import { recordAuditLog } from '../lib/audit.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingUpdate, MesError } from '../lib/mesClient.js';
 import { readScan, validateModbusConfig } from '../lib/modbusReader.js';
+import { findOperatorExams } from './operatorData.js';
 import {
   authenticateToken,
   authenticateMesOperator,
@@ -89,14 +90,24 @@ router.post('/api/mes/operator-login', async (req, res) => {
     return res.status(400).json({ success: false, message: 'กรุณากรอกรหัสพนักงานให้ถูกต้อง' });
   }
   try {
-    const op = await pool.query(
-      'SELECT employee_id, name, lines, station FROM automation_lines.operators WHERE employee_id::text = $1::text',
+    // ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดไฟล์หนึ่ง) ไม่ต้องระบุ Line / Station
+    const check = await findOperatorExams(employeeId);
+    if (!check.found) {
+      const unavailable = check.checked > 0 && check.failed === check.checked;
+      return res.status(unavailable ? 503 : 401).json({
+        success: false,
+        message: unavailable
+          ? 'อ่านไฟล์ Excel คะแนนสอบไม่ได้ กรุณาติดต่อ Admin (ตรวจสอบการเชื่อมต่อ Microsoft Graph)'
+          : 'ไม่พบประวัติการทำข้อสอบของรหัสพนักงานนี้',
+      });
+    }
+    // ชื่อ: ใช้จาก DB ถ้ามี ไม่งั้นใช้จาก Excel
+    const nameRes = await pool.query(
+      `SELECT name FROM automation_lines.operators WHERE employee_id::text = $1
+       UNION ALL SELECT name FROM auth.users WHERE employee_id::text = $1 LIMIT 1`,
       [employeeId]
     );
-    if (op.rowCount === 0) {
-      return res.status(401).json({ success: false, message: 'ไม่พบรหัสพนักงานนี้ในระบบ Operator' });
-    }
-    const operator = op.rows[0];
+    const operator = { employee_id: employeeId, name: nameRes.rows[0]?.name || check.name || '' };
     const expiresAt = nextShiftCutoff();
     const expiresInSec = Math.max(60, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
     const token = jwt.sign(
@@ -112,7 +123,7 @@ router.post('/api/mes/operator-login', async (req, res) => {
       deviceId: req.body?.device_id || null,
       action: 'MES_OPERATOR_LOGIN',
       target: 'MES Update',
-      details: `Operator #${operator.employee_id} เข้าใช้หน้า MES Update (หมดอายุ ${expiresAt.toISOString()})`,
+      details: `Operator #${operator.employee_id} เข้าใช้หน้า MES Update (ข้อสอบที่พบ: ${check.exams.map((e) => e.exam_name).join(', ')}; หมดอายุ ${expiresAt.toISOString()})`,
       ipAddress: getClientIp(req),
     });
 
@@ -120,7 +131,7 @@ router.post('/api/mes/operator-login', async (req, res) => {
       success: true,
       token,
       expires_at: expiresAt.toISOString(),
-      operator: { employee_id: String(operator.employee_id), name: operator.name || '', line: operator.lines || null },
+      operator,
     });
   } catch (err) {
     console.error('MES Operator Login Error:', err);
@@ -433,9 +444,10 @@ router.post('/api/mes/stations/:id/update-route', authenticateMesOperator, async
     }
 
     const log = await pool.query(
-      `INSERT INTO automation_lines.mes_update_logs (mes_station_id, emp_no, line, station, mo, sn, success, mes_response)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [id, req.mesOperator.employee_id, st.line, st.station, st.mo, sn, success, `${row}\n=> ${responseText}`.slice(0, 4000)]
+      `INSERT INTO automation_lines.mes_update_logs (mes_station_id, emp_no, emp_name, line, station, mo, sn, success, mes_response)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [id, req.mesOperator.employee_id, req.mesOperator.name || null, st.line, st.station, st.mo, sn, success,
+        `${row}\n=> ${responseText}`.slice(0, 4000)]
     );
     io.emit('mes_updated', { station_id: id, success });
 
@@ -456,10 +468,9 @@ router.get('/api/mes/logs', authenticateMesOrStaff, async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 500);
   try {
     const r = await pool.query(
-      `SELECT l.id, l.mes_station_id, l.emp_no, o.name AS emp_name, l.line, l.station, l.mo, l.sn, l.success,
+      `SELECT l.id, l.mes_station_id, l.emp_no, l.emp_name, l.line, l.station, l.mo, l.sn, l.success,
               l.mes_response, l.created_at
        FROM automation_lines.mes_update_logs l
-       LEFT JOIN automation_lines.operators o ON o.employee_id::text = l.emp_no
        WHERE ($1::int IS NULL OR l.mes_station_id = $1::int)
        ORDER BY l.created_at DESC, l.id DESC
        LIMIT $2`,

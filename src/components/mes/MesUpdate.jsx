@@ -737,7 +737,7 @@ export default function MesUpdate({ isDarkMode = false, embedded = false }) {
         {header}
         <form onSubmit={handleOperatorLogin} className={`rounded-2xl border p-6 space-y-4 max-w-sm mx-auto mt-10 ${card}`}>
           <div className={`text-lg font-bold text-center ${textMain}`}>เข้าสู่ระบบ Operator</div>
-          <p className="text-[11px] text-gray-400 text-center">กรอกหรือสแกนรหัสพนักงาน (ต้องมีในระบบ Operator)</p>
+          <p className="text-[11px] text-gray-400 text-center">กรอกหรือสแกนรหัสพนักงาน (ต้องเคยทำข้อสอบในระบบ)</p>
           <input
             className={`${input} w-full text-center text-base tracking-widest`}
             value={loginId}

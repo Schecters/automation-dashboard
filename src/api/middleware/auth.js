@@ -106,25 +106,14 @@ export const authenticateMesOperator = (req, res, next) => {
     return res.status(401).json({ code: 'MES_LOGIN_REQUIRED', message: 'กรุณาเข้าสู่ระบบด้วยรหัสพนักงาน' });
   }
 
-  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
-    if (err || decoded?.kind !== MES_OPERATOR_KIND) {
+  // เช็คสิทธิ์ (เคยทำข้อสอบใน Excel) ไปแล้วตอน login — token อายุไม่เกินรอบเปลี่ยนกะ จึงเชื่อ token ได้
+  // (ไม่เช็ค Excel ซ้ำทุก request เพราะหน้า MES เรียกอ่านสแกนทุก ~0.7 วินาที)
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err || decoded?.kind !== MES_OPERATOR_KIND || !decoded.employee_id) {
       return res.status(401).json({ code: 'MES_SESSION_EXPIRED', message: 'หมดเวลาการใช้งาน กรุณาเข้าสู่ระบบใหม่' });
     }
-    try {
-      // ถูกลบออกจากระบบ Operator แล้ว ใช้ต่อไม่ได้
-      const op = await pool.query(
-        'SELECT employee_id, name FROM automation_lines.operators WHERE employee_id::text = $1::text',
-        [decoded.employee_id]
-      );
-      if (op.rowCount === 0) {
-        return res.status(401).json({ code: 'MES_OPERATOR_NOT_FOUND', message: 'ไม่พบรหัสพนักงานนี้ในระบบ Operator' });
-      }
-      req.mesOperator = { employee_id: String(op.rows[0].employee_id), name: op.rows[0].name || '' };
-      return next();
-    } catch (dbErr) {
-      console.error('MES Operator Auth Error:', dbErr);
-      return res.status(500).json({ message: 'Authentication verification failed' });
-    }
+    req.mesOperator = { employee_id: String(decoded.employee_id), name: decoded.name || '' };
+    return next();
   });
 };
 

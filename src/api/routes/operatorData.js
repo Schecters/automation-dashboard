@@ -171,6 +171,92 @@ router.all('/api/operator-data', async (req, res) => {
   }
 });
 
+// ==========================================
+// 🔎 เช็คว่าพนักงานเคยทำข้อสอบ (มีชื่อในไฟล์ Excel คะแนนสอบไฟล์ใดไฟล์หนึ่ง) — ไม่ต้องระบุ Line / Station
+// ใช้กับหน้า MES Update (operator login) และเรียกตรงได้ที่ /api/operator-exam-check?employee_id=...
+// ==========================================
+const EXCEL_FETCH_TIMEOUT_MS = 15000;
+
+const sameEmployeeId = (a, b) => {
+  const x = String(a || '').trim();
+  const y = String(b || '').trim();
+  if (!x || !y) return false;
+  return x === y || x.replace(/^0+/, '') === y.replace(/^0+/, '');
+};
+
+const fetchExcelScores = async (configKey) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), EXCEL_FETCH_TIMEOUT_MS);
+  try {
+    const url = `http://127.0.0.1:${PORT}/publics/excel-scores?configKey=${encodeURIComponent(configKey)}&t=${Date.now()}`;
+    const res = await fetch(url, { signal: controller.signal });
+    const json = await res.json().catch(() => ({}));
+    // excel-scores ตอบ 200 + data [] + message เมื่อเปิดตารางไม่ได้ -> นับเป็นอ่านไม่สำเร็จ
+    if (!res.ok || !json.success || (json.message && !(json.data || []).length)) return { ok: false, data: [] };
+    return { ok: true, data: Array.isArray(json.data) ? json.data : [] };
+  } catch {
+    return { ok: false, data: [] };
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+// คืน { found, name, exams: [{ exam_key, exam_name, score }], checked, failed }
+export const findOperatorExams = async (employeeId) => {
+  const configs = await pool.query(`SELECT config_key, file_name FROM auth.excel_configs ORDER BY config_key`);
+  const results = await Promise.all(
+    configs.rows.map(async (cfg) => ({ cfg, ...(await fetchExcelScores(cfg.config_key)) }))
+  );
+
+  let name = '';
+  const exams = [];
+  for (const { cfg, data } of results) {
+    const matched = data.find((item) => sameEmployeeId(item.employeeId || item.employee_id || item.empId, employeeId));
+    if (!matched) continue;
+    if (!name && matched.name && matched.name !== '-') name = String(matched.name).trim();
+    exams.push({
+      exam_key: cfg.config_key,
+      exam_name: cfg.file_name ? cfg.file_name.replace('.xlsx', '') : cfg.config_key,
+      score: matched.score ?? null,
+    });
+  }
+
+  return {
+    found: exams.length > 0,
+    name,
+    exams,
+    checked: results.length,
+    failed: results.filter((r) => !r.ok).length,
+  };
+};
+
+router.get('/api/operator-exam-check', async (req, res) => {
+  const employeeId = String(req.query.employee_id || req.query.employeeId || '').trim();
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  if (!/^[\w-]{1,30}$/.test(employeeId)) {
+    return res.status(400).send(JSON.stringify({ status: 'error', message: 'กรุณาระบุ employee_id' }, null, 2));
+  }
+  try {
+    const r = await findOperatorExams(employeeId);
+    const unavailable = !r.found && r.checked > 0 && r.failed === r.checked;
+    return res.status(unavailable ? 503 : 200).send(JSON.stringify({
+      status: r.found ? 'pass' : unavailable ? 'error' : 'fail',
+      employee_id: employeeId,
+      operator_name: r.name || '-',
+      message: r.found
+        ? 'พบประวัติการทำข้อสอบ'
+        : unavailable
+          ? 'อ่านไฟล์ Excel คะแนนสอบไม่ได้ (ตรวจสอบการเชื่อมต่อ Microsoft Graph)'
+          : 'ไม่พบประวัติการทำข้อสอบของรหัสพนักงานนี้',
+      exams_checked: r.checked,
+      exams_unreadable: r.failed,
+      details: r.exams,
+    }, null, 2));
+  } catch (error) {
+    console.error('Operator Exam Check Error:', error);
+    return res.status(500).send(JSON.stringify({ status: 'error', message: 'เกิดข้อผิดพลาดในการประมวลผล' }, null, 2));
+  }
+});
 
 export default router;
 

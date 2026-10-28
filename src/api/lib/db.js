@@ -192,6 +192,8 @@ const migrateMes = async () => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    // ชื่อผู้สแกน (operator login จาก Excel คะแนนสอบ อาจไม่มีในตาราง operators)
+    await pool.query(`ALTER TABLE automation_lines.mes_update_logs ADD COLUMN IF NOT EXISTS emp_name VARCHAR(150);`);
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_mes_update_logs_station
         ON automation_lines.mes_update_logs (mes_station_id, created_at DESC);
