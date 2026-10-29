@@ -621,7 +621,9 @@ if (RELAY_SCANNER) {
       }
       queue.shift();
       sendToClients(Buffer.from(q.raw, 'latin1'));
-      if (q.seq !== null && q.waited) log(`[INFO] Relay: forwarded seq ${q.seq} to application`);
+      if (q.seq !== null && q.waited) {
+        log(`[INFO] Relay: forwarded ${JSON.stringify(q.raw.trim())} to application (held ${Date.now() - q.at} ms)`);
+      }
     }
   };
 
@@ -630,7 +632,7 @@ if (RELAY_SCANNER) {
     ...(RELAY_HOLD
       ? {
           onLine: (raw, seq) => {
-            queue.push({ raw, seq, released: seq === null, taken: false, takenAt: 0, waited: webActive() });
+            queue.push({ raw, seq, at: Date.now(), released: seq === null, taken: false, takenAt: 0, waited: webActive() });
             flush();
           },
         }
@@ -679,7 +681,8 @@ if (RELAY_SCANNER) {
     log(`[OK] Relay client connected ${ip} (${relayClients.size} connected)`);
     sock.setKeepAlive(true, 10000);
     sock.on('data', (chunk) => {
-      // คำสั่งจาก application ส่งต่อไปที่ Keyence
+      // คำสั่งจาก application ส่งต่อไปที่ Keyence (log ไว้ดูว่า application สั่ง trigger เองหรือไม่ เช่น LON)
+      log(`[APP->SCANNER] ${ip}: ${JSON.stringify(chunk.toString('latin1'))}${queue.length ? ` (${queue.length} QR waiting for web page)` : ''}`);
       if (reader.socket && reader.connected) reader.socket.write(chunk);
     });
     let lastError = '';
