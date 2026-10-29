@@ -27,7 +27,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 
 const CONFIG_FILE = path.join(__dirname, 'mes-bridge.config.json');
 let fileConfig = {};
@@ -54,6 +54,10 @@ const RELAY = fileConfig.relay || {};
 const RELAY_SCANNER = String(process.env.MES_BRIDGE_RELAY_SCANNER || RELAY.scanner || '').trim();
 const RELAY_ALLOW = listOf(process.env.MES_BRIDGE_RELAY_ALLOW || RELAY.allow);
 const RELAY_PORT = Number(process.env.MES_BRIDGE_RELAY_PORT || RELAY.listenPort || 9005);
+//  holdUntilWeb (default true) = ถ้าหน้าเว็บ /MES กำลัง Lock อยู่ ให้รอหน้าเว็บส่ง MES เสร็จก่อน แล้วค่อยส่ง QR ต่อให้ application
+//  holdTimeoutMs (default 30000) = หน้าเว็บไม่ตอบเกินเวลานี้ ส่งต่อให้ application เลย (กันค้าง)
+const RELAY_HOLD = RELAY.holdUntilWeb !== false;
+const RELAY_HOLD_TIMEOUT_MS = Math.max(1000, Number(RELAY.holdTimeoutMs) || 30000);
 
 const log = (...args) => console.log(new Date().toLocaleString('sv-SE'), ...args);
 
@@ -77,7 +81,8 @@ const tcpReaders = new Map();
 
 // persistent = ต่อค้างตลอด ไม่ปิดเมื่อหน้าเว็บเลิกใช้ (ใช้กับ relay ที่ application เครื่องอื่นต่ออยู่)
 // onRaw = รับข้อมูลดิบจากเครื่องสแกนทุก byte (relay ส่งต่อให้ application ตามเดิมทุกตัวอักษร)
-const createTcpReader = (host, port, { persistent = false, onRaw = null } = {}) => {
+// onLine(raw, seq) = รับทีละบรรทัด (ข้อมูลดิบรวมตัวขึ้นบรรทัด) seq = ลำดับ SN หรือ null ถ้าไม่ใช่ SN (ERROR / บรรทัดว่าง)
+const createTcpReader = (host, port, { persistent = false, onRaw = null, onLine = null } = {}) => {
   const r = { host, port, socket: null, connected: false, lastError: null, readError: null, buffer: '',
     seq: 0, items: [], lastPollAt: Date.now(), timer: null, closed: false, persistent };
 
@@ -98,22 +103,28 @@ const createTcpReader = (host, port, { persistent = false, onRaw = null } = {}) 
     });
     socket.on('data', (chunk) => {
       if (onRaw) onRaw(chunk);
-      r.buffer += chunk.toString('latin1');
-      const parts = r.buffer.split(/\r\n|\r|\n/);
-      r.buffer = parts.pop();
-      for (const part of parts) {
-        const line = part.replace(/[^\x20-\x7e]/g, '').trim();
-        if (!line) continue;
+      r.buffer += chunk.toString('latin1'); // latin1 = เก็บทุก byte ตามเดิม
+      const re = /\r\n|\r|\n/g;
+      let start = 0;
+      let m;
+      while ((m = re.exec(r.buffer))) {
+        const raw = r.buffer.slice(start, re.lastIndex);
+        const line = r.buffer.slice(start, m.index).replace(/[^\x20-\x7e]/g, '').trim();
+        start = re.lastIndex;
+        let seq = null;
         if (/^ERROR$/i.test(line)) {
           r.readError = 'เครื่องสแกนอ่าน QR ไม่ได้ (ERROR)';
-          continue;
+        } else if (line) {
+          r.readError = null;
+          r.seq += 1;
+          seq = r.seq;
+          r.items.push({ seq, sn: line, at: new Date().toISOString() });
+          if (r.items.length > TCP_MAX_ITEMS) r.items.shift();
+          log(`[SCAN] ${host}:${port} -> ${line}`);
         }
-        r.readError = null;
-        r.seq += 1;
-        r.items.push({ seq: r.seq, sn: line, at: new Date().toISOString() });
-        if (r.items.length > TCP_MAX_ITEMS) r.items.shift();
-        log(`[SCAN] ${host}:${port} -> ${line}`);
+        if (onLine) onLine(raw, seq);
       }
+      r.buffer = r.buffer.slice(start);
     });
     socket.on('error', (err) => {
       r.lastError = err.message;
@@ -176,7 +187,15 @@ const tcpRead = async ({ host, port, after }) => {
   }
   let items = [];
   if (after !== null) items = after > r.seq ? r.items : r.items.filter((i) => i.seq > after);
+  if (r.onPoll) r.onPoll(after, items);
   return { connected: true, error: r.readError, seq: r.seq, items };
+};
+
+// หน้าเว็บส่ง MES ของ SN ลำดับ seq เสร็จแล้ว (สำเร็จหรือไม่ก็ตาม) -> relay ส่ง QR นั้นต่อให้ application
+const tcpRelease = ({ host, port, seq }) => {
+  const r = tcpReaders.get(`${host}:${port}`);
+  if (r) r.lastPollAt = Date.now();
+  return { released: r?.onRelease ? r.onRelease(seq) : 0 };
 };
 
 // ------------------------------------------
@@ -386,14 +405,20 @@ const readBody = (req) =>
 // ------------------------------------------
 // อ่านเครื่องสแกน (ใช้ทั้งหน้าเว็บบนเครื่องนี้ และ PC อื่นที่อ่านผ่านเครื่องนี้)
 // ------------------------------------------
+const SCANNER_PATHS = ['/tcp/read', '/tcp/release', '/modbus/read'];
 const readScanner = async (pathname, b) => {
-  if (pathname === '/tcp/read') {
+  if (pathname === '/tcp/read' || pathname === '/tcp/release') {
     const host = String(b.host || '').trim();
     const port = Number(b.port ?? 9004);
     const after = b.after === null || b.after === undefined ? null : Number(b.after);
     if (!isPrivateIPv4(host)) throw new Error('IP เครื่องสแกนต้องเป็น IP ภายใน (10.x / 172.16-31.x / 192.168.x)');
     if (!validPort(port)) throw new Error('Port ไม่ถูกต้อง');
     if (after !== null && !Number.isInteger(after)) throw new Error('after ไม่ถูกต้อง');
+    if (pathname === '/tcp/release') {
+      const seq = Number(b.seq);
+      if (!Number.isInteger(seq)) throw new Error('seq ไม่ถูกต้อง');
+      return tcpRelease({ host, port, seq });
+    }
     return tcpRead({ host, port, after });
   }
   // /modbus/read
@@ -468,7 +493,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/health') {
       return sendJson(res, 200, { success: true, name: 'mes-bridge', version: VERSION, upstream: UPSTREAM || null });
     }
-    if (req.method === 'POST' && (url.pathname === '/tcp/read' || url.pathname === '/modbus/read')) {
+    if (req.method === 'POST' && SCANNER_PATHS.includes(url.pathname)) {
       const body = await readBody(req);
       return sendJson(res, 200, { success: true, ...(await handleRead(url.pathname, body)) });
     }
@@ -507,7 +532,7 @@ const peerServer = SHARE_TO.length
         if (req.method === 'GET' && url.pathname === '/health') {
           return sendJson(res, 200, { success: true, name: 'mes-bridge', version: VERSION });
         }
-        if (req.method === 'POST' && (url.pathname === '/tcp/read' || url.pathname === '/modbus/read')) {
+        if (req.method === 'POST' && SCANNER_PATHS.includes(url.pathname)) {
           const body = await readBody(req);
           // PC อื่นอ่านอย่างเดียว: ไม่ล้าง register (กันหน้าเว็บของเครื่องนี้พลาดค่า) และไม่สั่งปิด connection
           return sendJson(res, 200, { success: true, ...(await readScanner(url.pathname, { ...body, clear_after_read: false, close: false })) });
@@ -573,12 +598,74 @@ if (RELAY_SCANNER) {
 
   const relayClients = new Set();
   const key = `${scanHost}:${scanPort}`;
+  const sendToClients = (buf) => {
+    for (const c of relayClients) if (!c.destroyed) c.write(buf);
+  };
+
+  // คิว QR ที่รอหน้าเว็บส่ง MES เสร็จ (ส่งต่อตามลำดับเสมอ ตัวหน้ายังไม่ปล่อย ตัวหลังก็รอ)
+  //  taken    = หน้าเว็บรับ SN นี้ไปแล้ว รอ /tcp/release
+  //  released = ส่งต่อได้
+  const WEB_ACTIVE_MS = 3000; // หน้าเว็บถามเครื่องสแกนทุก ~0.7 วิ เงียบเกินนี้ = ไม่ได้ Lock / ปิดหน้าไปแล้ว
+  const queue = [];
+  const webActive = () => Date.now() - reader.lastPollAt < WEB_ACTIVE_MS;
+  const flush = () => {
+    const active = webActive();
+    while (queue.length) {
+      const q = queue[0];
+      if (!q.released) {
+        if (q.taken && Date.now() - q.takenAt >= RELAY_HOLD_TIMEOUT_MS) {
+          log(`[WARN] Relay: web page did not finish seq ${q.seq} in ${RELAY_HOLD_TIMEOUT_MS} ms, forwarding anyway`);
+        } else if (q.taken || active) {
+          break;
+        }
+      }
+      queue.shift();
+      sendToClients(Buffer.from(q.raw, 'latin1'));
+      if (q.seq !== null && q.waited) log(`[INFO] Relay: forwarded seq ${q.seq} to application`);
+    }
+  };
+
   const reader = createTcpReader(scanHost, scanPort, {
     persistent: true,
-    onRaw: (chunk) => {
-      for (const c of relayClients) if (!c.destroyed) c.write(chunk);
-    },
+    ...(RELAY_HOLD
+      ? {
+          onLine: (raw, seq) => {
+            queue.push({ raw, seq, released: seq === null, taken: false, takenAt: 0, waited: webActive() });
+            flush();
+          },
+        }
+      : { onRaw: sendToClients }),
   });
+  reader.lastPollAt = 0; // ยังไม่มีหน้าเว็บถาม
+  if (RELAY_HOLD) {
+    reader.onPoll = (after, items) => {
+      // after = null: หน้าเว็บเพิ่งเริ่ม ไม่ส่ง SN ที่สแกนไว้ก่อนหน้า / SN ที่หน้าเว็บข้ามไป -> ส่งต่อเลย
+      for (const q of queue) {
+        if (q.seq === null || q.taken) continue;
+        if (after === null || q.seq <= after) q.released = true;
+      }
+      const seqs = new Set(items.map((i) => i.seq));
+      for (const q of queue) {
+        if (seqs.has(q.seq) && !q.taken) {
+          q.taken = true;
+          q.takenAt = Date.now();
+        }
+      }
+      flush();
+    };
+    reader.onRelease = (seq) => {
+      let n = 0;
+      for (const q of queue) {
+        if (q.seq !== null && q.seq <= seq && !q.released) {
+          q.released = true;
+          n += 1;
+        }
+      }
+      flush();
+      return n;
+    };
+    setInterval(flush, 200).unref();
+  }
   tcpReaders.set(key, reader); // หน้าเว็บบนเครื่องนี้ที่ตั้งเครื่องสแกนเดียวกัน ใช้ connection นี้ร่วม
 
   const relayServer = net.createServer((sock) => {
@@ -610,6 +697,7 @@ if (RELAY_SCANNER) {
   relayServer.on('error', exitOnListenError(RELAY_PORT));
   relayServer.listen(RELAY_PORT, '0.0.0.0', () => {
     log(`[OK] Relay: scanner ${key} -> port ${RELAY_PORT} for ${RELAY_ALLOW.join(', ')}`);
+    if (RELAY_HOLD) log('     While the MES page is locked, each QR is forwarded after the page finishes sending to MES');
     log(`     Set the application on those PCs to connect to THIS PC's IP, port ${RELAY_PORT}`);
     log(`     (Windows Firewall must allow inbound TCP port ${RELAY_PORT})`);
   });

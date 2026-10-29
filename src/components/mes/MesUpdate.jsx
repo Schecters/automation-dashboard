@@ -399,7 +399,12 @@ export default function MesUpdate({ isDarkMode = false }) {
       for (const item of data.items) {
         if (cancelled) return false;
         tcpAfterRef.current = item.seq;
-        await processScan(item.sn, "TCP");
+        try {
+          await processScan(item.sn, "TCP");
+        } finally {
+          // ส่ง MES เสร็จแล้ว -> ให้ Bridge ส่ง QR นี้ต่อให้โปรแกรมอื่นที่ต่อ relay (Bridge รุ่นเก่าไม่มี endpoint นี้ ไม่เป็นไร)
+          await bridgeRead("/tcp/release", { host: cfg.modbus_host, port: Number(cfg.tcp_port), seq: item.seq }).catch(() => {});
+        }
       }
       if (data.items.length === 0 && data.seq < tcpAfterRef.current) tcpAfterRef.current = data.seq; // Bridge เริ่มนับใหม่
       return true;
