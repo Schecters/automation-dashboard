@@ -48,11 +48,12 @@ const SHARE_TO = listOf(process.env.MES_BRIDGE_SHARE_TO || fileConfig.shareTo);
 const PEER_PORT = Number(process.env.MES_BRIDGE_PEER_PORT || fileConfig.peerPort || 18081);
 const UPSTREAM = String(process.env.MES_BRIDGE_UPSTREAM || fileConfig.upstream || '').trim();
 // relay: เครื่องนี้ต่อ Keyence (TCP data port) ค้างไว้ แล้วทำตัวเป็น Keyence ให้ application เครื่องอื่นต่อแทน
-//  "relay": { "scanner": "192.168.1.49:9004", "listenPort": 9004, "allow": ["192.168.1.92"] }
+//  "relay": { "scanner": "192.168.1.49:9004", "listenPort": 9005, "allow": ["192.168.1.92"] }
+//  listenPort = port ที่เครื่องนี้เปิดรอให้ application ต่อ (default 9005)
 const RELAY = fileConfig.relay || {};
 const RELAY_SCANNER = String(process.env.MES_BRIDGE_RELAY_SCANNER || RELAY.scanner || '').trim();
 const RELAY_ALLOW = listOf(process.env.MES_BRIDGE_RELAY_ALLOW || RELAY.allow);
-const RELAY_PORT = Number(process.env.MES_BRIDGE_RELAY_PORT || RELAY.listenPort || RELAY_SCANNER.split(':')[1] || 9004);
+const RELAY_PORT = Number(process.env.MES_BRIDGE_RELAY_PORT || RELAY.listenPort || 9005);
 
 const log = (...args) => console.log(new Date().toLocaleString('sv-SE'), ...args);
 
