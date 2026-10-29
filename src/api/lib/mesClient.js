@@ -1,4 +1,4 @@
-import { MES_API_BASE } from './config.js';
+import { MES_API_BASE, MES_INPUT_UPDATE_PATH } from './config.js';
 
 // ==========================================
 // 🏭 เรียก MES API (http://10.204.212.22:5207)
@@ -6,6 +6,7 @@ import { MES_API_BASE } from './config.js';
 //  - molist   : [{ MO_NUMBER, MODEL_NAME, LINE_NAME }] (พารามิเตอร์ line ของ MES ไม่กรอง ต้องกรองเอง)
 //  - routing-update : POST /api/mes/tdc/typed/routing-update
 //                     { routingData: ["SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1"], testData: "" }
+//  - input-update   : POST MES_INPUT_UPDATE_PATH (default /api/mes/tdc/input-update)
 // ==========================================
 
 const MES_TIMEOUT_MS = 10000;
@@ -114,6 +115,31 @@ export const routingUpdate = async (rows) => {
   const payload = { routingData: rows, testData: '' };
   // path ต้องมี / เดียว (แบบ //tdc ได้ 404)
   const result = await mesFetch('/api/mes/tdc/typed/routing-update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return { ...result, payload };
+};
+
+// input-update (station แบบ input เช่นจุดแรกที่ SN เข้า WO) — ไม่ต้อง routing-check ก่อน
+// { sn, mo, model, line, section, group, station, employeeId, barcodePrefix, barcodeLength, testData: "" }
+export const buildInputPayload = ({ sn, mo, model, line, section, group, station, empNo, barcodePrefix, barcodeLength }) => ({
+  sn: cleanField(sn),
+  mo: cleanField(mo),
+  model: cleanField(model),
+  line: cleanField(line),
+  section: cleanField(section),
+  group: cleanField(group),
+  station: cleanField(station),
+  employeeId: cleanField(empNo),
+  barcodePrefix: cleanField(barcodePrefix),
+  barcodeLength: Math.max(0, Math.floor(Number(barcodeLength) || 0)),
+  testData: '',
+});
+
+export const inputUpdate = async (payload) => {
+  const result = await mesFetch(MES_INPUT_UPDATE_PATH, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

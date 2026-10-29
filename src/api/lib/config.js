@@ -27,6 +27,8 @@ export const MES_API_BASE = (process.env.MES_API_BASE || 'http://10.204.212.22:5
 export const MES_QUERY_EMP_NO = String(process.env.MES_QUERY_EMP_NO || '86727533').trim();
 // ประวัติการส่ง MES เก็บเป็นไฟล์ CSV ที่นี่ (ไม่ใช้ Database)
 export const MES_LOG_DIR = path.resolve(process.env.MES_LOG_DIR || 'D:/MES logs');
+// path ของ input-update (station แบบ input) — ถ้า MES ใช้ path อื่น เปลี่ยนได้ใน .env
+export const MES_INPUT_UPDATE_PATH = '/' + String(process.env.MES_INPUT_UPDATE_PATH || 'api/mes/tdc/input-update').trim().replace(/^\/+/, '');
 
 // ==========================================
 // 📁 เตรียมโฟลเดอร์สำหรับจัดเก็บไฟล์

@@ -61,7 +61,12 @@ const formatTime = (v) =>
       })
     : "-";
 
-const EMPTY_STATION_FORM = { id: null, label: "", line: "", section_name: "", group_name: "", station: "" };
+// send_mode: "routing" = routing-check + routing-update (PASS/FAIL), "input" = input-update (ไม่มี PASS/FAIL)
+const EMPTY_STATION_FORM = {
+  id: null, label: "", line: "", section_name: "", group_name: "", station: "",
+  send_mode: "routing", barcode_prefix: "", barcode_length: 0,
+};
+const isInputMode = (st) => st?.send_mode === "input";
 // การเชื่อมต่อเครื่องสแกน: mode "tcp" = Keyence ส่งผลอ่านมาทาง TCP data port, "modbus" = อ่าน register
 // (ค่าที่บันทึกไว้รุ่นก่อนไม่มี mode = modbus)
 const scannerMode = (cfg) => cfg?.mode || "modbus";
@@ -312,7 +317,8 @@ export default function MesUpdate({ isDarkMode = false }) {
       try {
         for (let i = 0; i < targets.length; i++) {
           const st = targets[i];
-          const result = failArmedRef.current.has(st.id) ? "FAIL" : "PASS";
+          const inputMode = isInputMode(st);
+          const result = inputMode ? "INPUT" : failArmedRef.current.has(st.id) ? "FAIL" : "PASS";
           setStationRuntime(st.id, { sn, result, status: "sending", text: `กำลังส่ง ${result}...` });
           const upd = await fetch(`${API_URL}/mes/update-route`, {
             method: "POST",
@@ -321,6 +327,9 @@ export default function MesUpdate({ isDarkMode = false }) {
               terminal: terminalRef.current,
               sn,
               result,
+              mode: inputMode ? "input" : "routing",
+              barcode_prefix: inputMode ? st.barcode_prefix || "" : undefined,
+              barcode_length: inputMode ? Number(st.barcode_length) || 0 : undefined,
               line: st.line,
               station: st.station,
               group: st.group_name,
@@ -616,8 +625,13 @@ export default function MesUpdate({ isDarkMode = false }) {
 
   const saveStation = (e) => {
     e.preventDefault();
-    const { id, label: name, line, section_name, group_name, station } = stationForm;
-    const data = { label: name?.trim() || "", line, section_name, group_name, station };
+    const { id, label: name, line, section_name, group_name, station, send_mode, barcode_prefix, barcode_length } = stationForm;
+    const data = {
+      label: name?.trim() || "", line, section_name, group_name, station,
+      send_mode: send_mode === "input" ? "input" : "routing",
+      barcode_prefix: String(barcode_prefix || "").trim(),
+      barcode_length: Math.max(0, Math.floor(Number(barcode_length) || 0)),
+    };
     if (id) {
       // เปลี่ยน Line แล้ว WO เดิมใช้ไม่ได้
       setStations((prev) =>
@@ -938,6 +952,28 @@ export default function MesUpdate({ isDarkMode = false }) {
                   <input className={`${input} w-full`} value={stationForm.label || ""}
                     onChange={(e) => setStationForm({ ...stationForm, label: e.target.value })} />
                 </div>
+                <div>
+                  <label className={label}>วิธีส่ง MES</label>
+                  <select className={`${input} w-full`} value={stationForm.send_mode || "routing"}
+                    onChange={(e) => setStationForm({ ...stationForm, send_mode: e.target.value })}>
+                    <option value="routing">routing-update (PASS / FAIL)</option>
+                    <option value="input">input-update</option>
+                  </select>
+                </div>
+                {stationForm.send_mode === "input" && (
+                  <>
+                    <div>
+                      <label className={label}>Barcode Prefix</label>
+                      <input className={`${input} w-full`} value={stationForm.barcode_prefix || ""}
+                        onChange={(e) => setStationForm({ ...stationForm, barcode_prefix: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className={label}>Barcode Length (0 = ไม่กำหนด)</label>
+                      <input type="number" min="0" className={`${input} w-full`} value={stationForm.barcode_length ?? 0}
+                        onChange={(e) => setStationForm({ ...stationForm, barcode_length: e.target.value })} />
+                    </div>
+                  </>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 <button type="submit" className={btnPrimary}>บันทึก</button>
@@ -962,7 +998,10 @@ export default function MesUpdate({ isDarkMode = false }) {
                 <div className="flex-1 min-w-0">
                   <div className={`text-sm font-bold truncate ${textMain}`}>{st.label || st.station}</div>
                   <div className="text-[11px] text-gray-400">
-                    <span className="text-blue-400 font-semibold">{st.line}</span> · {st.station} · {st.section_name}/{st.group_name}
+                    <span className="text-blue-400 font-semibold">{st.line}</span> · {st.station} · {st.section_name}/{st.group_name} ·{" "}
+                    <span className={isInputMode(st) ? "text-amber-500 font-semibold" : ""}>
+                      {isInputMode(st) ? "input-update" : "routing-update"}
+                    </span>
                   </div>
                 </div>
                 <button type="button" className={btnGhost} onClick={() => setStationForm({ ...EMPTY_STATION_FORM, ...st })}>
@@ -1113,6 +1152,7 @@ export default function MesUpdate({ isDarkMode = false }) {
                     <div className={`text-sm font-bold truncate ${textMain}`}>{st.label || st.station}</div>
                     <div className="text-[11px] text-gray-400 truncate">
                       <span className="text-blue-400 font-semibold">{st.line}</span> · {st.station}
+                      {isInputMode(st) && <span className="text-amber-500 font-semibold"> · INPUT</span>}
                     </div>
                   </div>
                 </div>
@@ -1151,7 +1191,7 @@ export default function MesUpdate({ isDarkMode = false }) {
                   )}
                 </div>
 
-                <button
+                {!isInputMode(st) && <button
                   type="button"
                   onClick={() => toggleFail(st)}
                   disabled={!isLocked}
@@ -1161,7 +1201,7 @@ export default function MesUpdate({ isDarkMode = false }) {
                   }`}
                 >
                   {isFail ? "✕ ยกเลิก FAIL" : "✖ FAIL"}
-                </button>
+                </button>}
 
                 <button
                   type="button"

@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { io } from '../lib/realtime.js';
 import { JWT_SECRET, MES_QUERY_EMP_NO } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
-import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
+import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs } from '../lib/mesLog.js';
 import { findOperatorExams } from './operatorData.js';
 import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
@@ -168,13 +168,15 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
   // SN ส่งตามที่สแกนได้ทั้งหมด (บาง model มีช่องว่างใน SN เช่น "... Y" ห้ามตัด)
   // ตัดแค่ Enter/บรรทัดใหม่ท้ายผลอ่าน และ "}" ที่เป็นตัวคั่นของ MES
   const sn = text(String(req.body?.sn ?? '').replace(/[}\r\n]/g, '').trim(), 200);
-  const result = String(req.body?.result || 'PASS').toUpperCase();
+  // mode: 'routing' (routing-check -> routing-update) หรือ 'input' (input-update อย่างเดียว ไม่มี PASS/FAIL)
+  const mode = req.body?.mode === 'input' ? 'input' : 'routing';
+  const result = mode === 'input' ? 'INPUT' : String(req.body?.result || 'PASS').toUpperCase();
   const line = text(req.body?.line, 100);
   const stationName = text(req.body?.station, 100);
   const mo = text(req.body?.mo, 50);
   const terminal = text(req.body?.terminal, 100) || '';
   if (!sn) return res.status(400).json({ success: false, message: 'ไม่มี Serial Number' });
-  if (!ROUTING_RESULTS.includes(result)) return res.status(400).json({ success: false, message: 'ผลต้องเป็น PASS หรือ FAIL' });
+  if (mode === 'routing' && !ROUTING_RESULTS.includes(result)) return res.status(400).json({ success: false, message: 'ผลต้องเป็น PASS หรือ FAIL' });
   if (!line || !stationName) return res.status(400).json({ success: false, message: 'ไม่มี Line / Station' });
   if (!mo) return res.status(400).json({ success: false, message: 'กรุณาเลือก WO ของ station นี้ก่อน' });
 
@@ -195,7 +197,7 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
     if (!moRow) moRow = (await cachedMoList(line, { fresh: true })).find((r) => String(r.MO_NUMBER) === mo);
     if (!moRow) return res.status(400).json({ success: false, message: `ไม่พบ WO ${mo} ของ Line ${line} ใน MES` });
 
-    const row = buildRoutingRow({
+    const fields = {
       sn,
       mo,
       model: moRow.MODEL_NAME,
@@ -204,33 +206,38 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
       group: st.GROUP_NAME,
       station: st.STATION_NAME,
       empNo,
-      result,
-    });
+    };
+    const inputPayload =
+      mode === 'input'
+        ? buildInputPayload({ ...fields, barcodePrefix: req.body?.barcode_prefix, barcodeLength: req.body?.barcode_length })
+        : null;
+    const row = inputPayload ? JSON.stringify(inputPayload) : buildRoutingRow({ ...fields, result });
 
     let success = false;
     let responseText = '';
     let message = '';
     try {
-      // 1) routing-check ก่อน (check-in SN ที่ station) — ไม่ OK ไม่ต้อง update
-      const check = await routingCheck({
-        sn,
-        mo,
-        model: moRow.MODEL_NAME,
-        line,
-        section: st.SECTION_NAME,
-        group: st.GROUP_NAME,
-        station: st.STATION_NAME,
-      });
-      if (!check.ok) {
-        responseText = `CHECK: ${check.text}`;
-        message = `Routing ไม่ผ่าน: ${check.description || check.result || 'MES ไม่ตอบ OK'}`;
-      } else {
-        // 2) routing-update
-        const mesRes = await routingUpdate([row]);
+      if (inputPayload) {
+        // input-update อย่างเดียว (SN ยังไม่เข้า routing จึงไม่ต้อง routing-check)
+        const mesRes = await inputUpdate(inputPayload);
         success = true;
-        responseText = `CHECK OK; UPDATE: ${mesRes.text}`;
-        message = `ส่ง ${result} สำเร็จ`;
+        responseText = `INPUT: ${mesRes.text}`;
+        message = 'Input สำเร็จ';
         lastSent.set(key, { sn, result });
+      } else {
+        // 1) routing-check ก่อน (check-in SN ที่ station) — ไม่ OK ไม่ต้อง update
+        const check = await routingCheck(fields);
+        if (!check.ok) {
+          responseText = `CHECK: ${check.text}`;
+          message = `Routing ไม่ผ่าน: ${check.description || check.result || 'MES ไม่ตอบ OK'}`;
+        } else {
+          // 2) routing-update
+          const mesRes = await routingUpdate([row]);
+          success = true;
+          responseText = `CHECK OK; UPDATE: ${mesRes.text}`;
+          message = `ส่ง ${result} สำเร็จ`;
+          lastSent.set(key, { sn, result });
+        }
       }
     } catch (err) {
       responseText = err.body ? JSON.stringify(err.body) : err.message;
