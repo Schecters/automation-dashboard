@@ -105,6 +105,7 @@ const bridgeDisconnect = (cfg) => {
 };
 
 const SOURCE_LABEL = { TCP: "จาก Keyence (TCP)", Modbus: "จาก Modbus", Scanner: "จาก Scanner" };
+const PASS_POPUP_MS = 300; // popup PASS หลังส่ง MES ผ่าน
 
 const EMPTY_MODBUS_FORM = {
   mode: "tcp",
@@ -156,6 +157,9 @@ export default function MesUpdate({ isDarkMode = false }) {
   const failArmedRef = useRef(failArmed);
   const mesAuthRef = useRef(mesAuth);
   const sendingRef = useRef(false);
+  const [passPopup, setPassPopup] = useState(false);
+  const passPopupTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(passPopupTimerRef.current), []);
   const lastSeenRef = useRef(""); // SN ล่าสุดที่อ่านจาก Modbus ("" = register ว่าง / ถูกล้าง)
   const tcpAfterRef = useRef(null); // seq ล่าสุดที่รับจาก TCP data port แล้ว (null = เพิ่งเริ่ม)
   const manualRef = useRef(null);
@@ -314,6 +318,7 @@ export default function MesUpdate({ isDarkMode = false }) {
       });
 
       let allOk = true;
+      let sentPass = false; // มี station ที่ส่ง PASS / INPUT สำเร็จจริง (ไม่นับที่ข้ามเพราะซ้ำ)
       try {
         for (let i = 0; i < targets.length; i++) {
           const st = targets[i];
@@ -354,8 +359,10 @@ export default function MesUpdate({ isDarkMode = false }) {
             rest.forEach((r) => setStationRuntime(r.id, { sn, status: "stopped", text: "ไม่ได้ส่ง (station ก่อนหน้าไม่สำเร็จ)" }));
             break;
           }
+          if (result !== "FAIL" && !out.skipped) sentPass = true;
           if (result === "FAIL") {
             // ชิ้นงาน FAIL ที่ station นี้ -> ไม่ส่ง station ถัดไป และกลับเป็นโหมด PASS
+            sentPass = false;
             setFailArmed((prev) => {
               const next = new Set(prev);
               next.delete(st.id);
@@ -371,6 +378,12 @@ export default function MesUpdate({ isDarkMode = false }) {
       } finally {
         sendingRef.current = false;
         setSending(false);
+      }
+      if (allOk && sentPass) {
+        // ส่ง MES ผ่านครบทุก station -> popup PASS 0.3 วินาที
+        clearTimeout(passPopupTimerRef.current);
+        setPassPopup(true);
+        passPopupTimerRef.current = setTimeout(() => setPassPopup(false), PASS_POPUP_MS);
       }
       return allOk;
     },
@@ -1079,6 +1092,11 @@ export default function MesUpdate({ isDarkMode = false }) {
 
   return (
     <div className={wrapper}>
+      {passPopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+          <div className="px-16 py-8 rounded-3xl bg-emerald-600 text-white text-7xl font-black shadow-2xl">PASS</div>
+        </div>
+      )}
       {header}
       {messageBar}
 
