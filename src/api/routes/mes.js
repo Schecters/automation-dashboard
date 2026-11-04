@@ -5,7 +5,7 @@ import { JWT_SECRET, MES_QUERY_EMP_NO } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs } from '../lib/mesLog.js';
-import { findOperatorExams } from '../lib/operatorExams.js';
+import { findOperatorExams, checkOperatorQualification } from '../lib/operatorExams.js';
 import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -67,24 +67,67 @@ const text = (v, max) => {
 // ------------------------------------------
 // Operator login (เช็คจาก Excel คะแนนสอบ)
 // ------------------------------------------
+const EXCEL_UNAVAILABLE_MESSAGE = 'อ่านไฟล์ Excel คะแนนสอบไม่ได้ กรุณาติดต่อ Admin (ตรวจสอบการเชื่อมต่อ Microsoft Graph)';
+const MAX_QUAL_STATIONS = 20;
+
+// เกณฑ์ความสามารถที่ตั้งไว้ในเครื่องนั้น [{ line, station }] (ตัดค่าว่าง / ซ้ำ)
+const parseQualStations = (raw) => {
+  const seen = new Set();
+  const list = [];
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const line = text(item?.line, 100);
+    const station = text(item?.station, 100);
+    const key = `${line}|${station}`;
+    if (!line || !station || seen.has(key)) continue;
+    seen.add(key);
+    list.push({ line, station });
+    if (list.length >= MAX_QUAL_STATIONS) break;
+  }
+  return list;
+};
+
+const describeExamFail = (e) =>
+  e.status === 'FAIL'
+    ? `${e.exam_name} ได้ ${e.score} (ต้อง ≥ ${e.min_score})`
+    : e.status === 'UNREADABLE'
+      ? `${e.exam_name} อ่านไฟล์ไม่ได้`
+      : `${e.exam_name} ไม่มีคะแนน`;
+
 router.post('/api/mes/operator-login', async (req, res) => {
   const employeeId = String(req.body?.employee_id || '').trim();
   if (!/^[\w-]{1,30}$/.test(employeeId)) {
     return res.status(400).json({ success: false, message: 'กรุณากรอกรหัสพนักงานให้ถูกต้อง' });
   }
+  const qualStations = parseQualStations(req.body?.qual_stations);
   try {
-    // ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดไฟล์หนึ่ง) ไม่ต้องระบุ Line / Station
-    const check = await findOperatorExams(employeeId);
-    if (!check.found) {
-      const unavailable = check.checked > 0 && check.failed === check.checked;
-      return res.status(unavailable ? 503 : 401).json({
-        success: false,
-        message: unavailable
-          ? 'อ่านไฟล์ Excel คะแนนสอบไม่ได้ กรุณาติดต่อ Admin (ตรวจสอบการเชื่อมต่อ Microsoft Graph)'
-          : 'ไม่พบประวัติการทำข้อสอบของรหัสพนักงานนี้',
-      });
+    let name = '';
+    let examsSummary = '';
+    if (qualStations.length > 0) {
+      // เครื่องนี้ตั้งเกณฑ์ไว้ -> ต้องผ่านข้อสอบบังคับของทุก Line + Station ที่ตั้ง
+      const qual = await checkOperatorQualification(employeeId, qualStations);
+      if (qual.unavailable) return res.status(503).json({ success: false, message: EXCEL_UNAVAILABLE_MESSAGE });
+      if (!qual.passed) {
+        const reasons = qual.results
+          .filter((r) => !r.passed)
+          .map((r) => `${r.line} / ${r.station}: ${r.exams.filter((e) => e.status !== 'PASS').map(describeExamFail).join(', ')}`);
+        return res.status(401).json({ success: false, message: `ไม่ผ่านเกณฑ์ ${reasons.join(' | ')}` });
+      }
+      name = qual.name;
+      examsSummary = qual.results.map((r) => `${r.line}/${r.station} ผ่าน`).join(' / ');
+    } else {
+      // ยังไม่ตั้งเกณฑ์: แค่ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดไฟล์หนึ่ง)
+      const check = await findOperatorExams(employeeId);
+      if (!check.found) {
+        const unavailable = check.checked > 0 && check.failed === check.checked;
+        return res.status(unavailable ? 503 : 401).json({
+          success: false,
+          message: unavailable ? EXCEL_UNAVAILABLE_MESSAGE : 'ไม่พบประวัติการทำข้อสอบของรหัสพนักงานนี้',
+        });
+      }
+      name = check.name;
+      examsSummary = check.exams.map((e) => e.exam_name).join(' / ');
     }
-    const operator = { employee_id: employeeId, name: check.name || '' };
+    const operator = { employee_id: employeeId, name: name || '' };
     const expiresAt = nextShiftCutoff();
     const expiresInSec = Math.max(60, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
     const token = jwt.sign({ kind: MES_OPERATOR_KIND, ...operator }, JWT_SECRET, { expiresIn: expiresInSec });
@@ -94,7 +137,7 @@ router.post('/api/mes/operator-login', async (req, res) => {
       emp_name: operator.name,
       terminal: text(req.body?.terminal, 100) || '',
       ip: getClientIp(req),
-      exams: check.exams.map((e) => e.exam_name).join(' / '),
+      exams: examsSummary,
     });
 
     res.json({ success: true, token, expires_at: expiresAt.toISOString(), operator });

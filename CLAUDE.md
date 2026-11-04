@@ -104,6 +104,8 @@ git push
   หน้าใช้งาน `src/components/mes/MesUpdate.jsx`, API `src/api/routes/mes.js` — **ไม่ใช้ Database**
   - operator login ด้วยรหัสพนักงาน ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดก็ได้ใน `auth.excel_configs`
     ฟังก์ชัน `findOperatorExams` ใน `src/api/lib/operatorExams.js`, เรียกตรงได้ที่ `/api/operator-exam-check?employee_id=`)
+    ถ้าเครื่องนั้นตั้ง **เกณฑ์ความสามารถ** (`mesQualStations` = Line/Station จาก dashboard) operator ต้องผ่านข้อสอบบังคับ + คะแนนขั้นต่ำ
+    ของ **ทุก** station ที่ตั้ง (`checkOperatorQualification` ใน `operatorExams.js`, เกณฑ์จาก `automation_lines.station_exams`) — ไม่ตั้ง = เช็คแบบเดิม
     ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
     ดู Line / Station / WO (lineinfo, molist) ใช้รหัสกลาง `MES_QUERY_EMP_NO` (default 86727533) / routing-update ใช้รหัส operator ที่ login
@@ -115,7 +117,7 @@ git push
     2 แบบ: TCP data port เช่น 9004 (Keyence SR) หรือ Modbus TCP — server ไม่ได้ต่อเครื่องสแกนแล้ว
     ถ้าเปลี่ยน URL เว็บ ต้องเพิ่มใน `MES_BRIDGE_ORIGINS` ของ Bridge
     สแกน 1 ครั้ง → ส่งให้ทุก station ที่ Lock ตามลำดับบนลงล่าง (หยุดเมื่อ station ใดไม่สำเร็จ หรือส่ง FAIL แล้ว)
-  - การตั้งค่าของแต่ละเครื่อง เก็บในเบราว์เซอร์เครื่องนั้น: `mesTerminal` (ชื่อเครื่อง), `mesModbus`, `mesStations`
+  - การตั้งค่าของแต่ละเครื่อง เก็บในเบราว์เซอร์เครื่องนั้น: `mesTerminal` (ชื่อเครื่อง), `mesModbus`, `mesStations`, `mesQualStations` (เกณฑ์ความสามารถ)
     แก้ได้เฉพาะ ME, admin (หน้าตั้งค่าต้อง login) / ล้างข้อมูลเบราว์เซอร์ = ต้องตั้งค่าใหม่
   - ประวัติการส่ง: ไฟล์ CSV ที่ `MES_LOG_DIR` (default `D:\MES logs`) — `YYYY-MM-DD.csv` และ `login_YYYY-MM.csv` (`src/api/lib/mesLog.js`)
   - ตาราง `automation_lines.mes_*` ที่เคยสร้างไว้รุ่นก่อน เลิกใช้แล้ว (ลบได้)

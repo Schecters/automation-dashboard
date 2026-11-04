@@ -15,7 +15,7 @@ const inputStyle = {
   backgroundColor: "white",
 };
 
-export default function MesLogin({ onLoggedIn, onOpenSettings, message, terminal }) {
+export default function MesLogin({ onLoggedIn, onOpenSettings, message, terminal, qualStations = [] }) {
   const [employeeId, setEmployeeId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -26,7 +26,7 @@ export default function MesLogin({ onLoggedIn, onOpenSettings, message, terminal
     if (!id || loading) return;
     setLoading(true);
     setError("");
-    const { auth, error: err } = await operatorLogin(id, terminal || "");
+    const { auth, error: err } = await operatorLogin(id, terminal || "", qualStations);
     setLoading(false);
     if (err) {
       setError(err);
@@ -119,6 +119,12 @@ export default function MesLogin({ onLoggedIn, onOpenSettings, message, terminal
             }}
           >
             เครื่องนี้: {terminal || "ยังไม่ได้ตั้งชื่อ (ให้ ME / Admin ตั้งค่า)"}
+            <div style={{ color: "#64748b", fontWeight: 500, marginTop: "4px" }}>
+              เกณฑ์:{" "}
+              {qualStations.length > 0
+                ? qualStations.map((q) => `${q.line} / ${q.station}`).join(", ")
+                : "ยังไม่ตั้ง (เช็คแค่เคยทำข้อสอบ)"}
+            </div>
           </div>
 
           <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>

@@ -15,6 +15,9 @@ const MES_LOCKED_KEY = "mesLockedStations";
 const MES_TERMINAL_KEY = "mesTerminal"; // ชื่อเครื่องนี้ (ใช้ระบุในไฟล์ log)
 const MES_STATIONS_KEY = "mesStations"; // station ของเครื่องนี้ เรียงบนลงล่าง
 const MES_MODBUS_KEY = "mesModbus"; // การเชื่อมต่อเครื่องสแกน (null = ไม่ใช้ Modbus)
+// เกณฑ์ความสามารถ operator ของเครื่องนี้ [{ line, station }] จาก Lines & Stations ของ dashboard (ว่าง = เช็คแค่เคยทำข้อสอบ)
+const MES_QUAL_KEY = "mesQualStations";
+const qualKey = (q) => `${q.line}|${q.station}`;
 const POLL_INTERVAL_MS = 700;
 const STAFF_ROLES = ["admin", "me"];
 
@@ -151,6 +154,11 @@ export default function MesUpdate({ isDarkMode = false }) {
   const [modbusForm, setModbusForm] = useState(EMPTY_MODBUS_FORM);
   const [testResult, setTestResult] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [qualStations, setQualStations] = useState(() => loadJson(MES_QUAL_KEY, []));
+  const [dashLines, setDashLines] = useState([]); // Line จาก dashboard (ไม่ใช่จาก MES)
+  const [qualForm, setQualForm] = useState({ line: "", station: "" });
+  const [qualLineStations, setQualLineStations] = useState([]);
+  const [qualExams, setQualExams] = useState({}); // "line|station" -> [{ file_name, min_score, is_required }] | { error }
 
   const stationsRef = useRef([]);
   const lockedRef = useRef(locked);
@@ -557,11 +565,70 @@ export default function MesUpdate({ isDarkMode = false }) {
     }
   };
 
+  // ---------- เกณฑ์ความสามารถ operator (Line / Station / ข้อสอบ จาก dashboard) ----------
+  const fetchQualExams = async (q) => {
+    try {
+      const res = await fetch(`${API_URL}/lines/${encodeURIComponent(q.line)}/stations/${encodeURIComponent(q.station)}/exams`);
+      const data = await res.json();
+      setQualExams((prev) => ({
+        ...prev,
+        [qualKey(q)]: data.success ? data.data.filter((e) => e.is_required !== false) : { error: data.message || "โหลดเกณฑ์ไม่ได้" },
+      }));
+    } catch (err) {
+      setQualExams((prev) => ({ ...prev, [qualKey(q)]: { error: err.message } }));
+    }
+  };
+
+  const loadQualSettings = async () => {
+    qualStations.forEach(fetchQualExams);
+    try {
+      const res = await fetch(`${API_URL}/lines`);
+      const data = await res.json();
+      if (Array.isArray(data)) setDashLines(data.map((l) => String(l.id)));
+    } catch (err) {
+      setMessage({ type: "error", text: `โหลด Line จาก dashboard ไม่ได้: ${err.message}` });
+    }
+  };
+
+  const changeQualLine = async (line) => {
+    setQualForm({ line, station: "" });
+    setQualLineStations([]);
+    if (!line) return;
+    try {
+      const res = await fetch(`${API_URL}/lines/${encodeURIComponent(line)}/stations`);
+      const data = await res.json();
+      if (data.success) setQualLineStations(data.data.map((s) => ({ id: String(s.id), name: s.name || "" })));
+      else setMessage({ type: "error", text: data.message });
+    } catch (err) {
+      setMessage({ type: "error", text: `โหลด Station ของ ${line} ไม่ได้: ${err.message}` });
+    }
+  };
+
+  const saveQualStations = (next) => {
+    saveJson(MES_QUAL_KEY, next);
+    setQualStations(next);
+  };
+
+  const addQualStation = () => {
+    const q = { line: qualForm.line, station: qualForm.station };
+    if (!q.line || !q.station) return;
+    if (qualStations.some((x) => qualKey(x) === qualKey(q))) {
+      setMessage({ type: "error", text: `มีเกณฑ์ ${q.line} / ${q.station} อยู่แล้ว` });
+      return;
+    }
+    saveQualStations([...qualStations, q]);
+    setQualForm((p) => ({ ...p, station: "" }));
+    fetchQualExams(q);
+  };
+
+  const removeQualStation = (q) => saveQualStations(qualStations.filter((x) => qualKey(x) !== qualKey(q)));
+
   const openSettings = () => {
     setShowSettings(true);
     setStationForm(null);
     setTestResult(null);
     setModbusForm(modbusCfg ? { ...EMPTY_MODBUS_FORM, ...modbusCfg } : EMPTY_MODBUS_FORM);
+    loadQualSettings();
   };
 
   useEffect(() => {
@@ -1037,6 +1104,72 @@ export default function MesUpdate({ isDarkMode = false }) {
             ))}
           </div>
         </div>
+
+        {/* 4) เกณฑ์ความสามารถ operator (จาก Lines & Stations ของ dashboard) */}
+        <div className={`rounded-2xl border p-4 space-y-3 ${card}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className={`text-sm font-bold ${textMain}`}>
+                4. เกณฑ์ความสามารถ operator ของเครื่องนี้{" "}
+                {qualStations.length === 0 && <span className="text-gray-400">— ยังไม่ตั้ง (เช็คแค่เคยทำข้อสอบ)</span>}
+              </div>
+              <p className="text-[11px] text-gray-400">
+                operator ต้องผ่านข้อสอบบังคับของ <b>ทุก</b> Line / Station ที่เลือก ถึงจะ login ได้
+                (ข้อสอบและคะแนนขั้นต่ำ ตั้งในหน้า Lines &amp; Stations ของ dashboard)
+              </p>
+            </div>
+            <button type="button" className={btnGhost} onClick={loadQualSettings}>↻ โหลดใหม่</button>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <div>
+              <label className={label}>Line (dashboard)</label>
+              <select className={`${input} w-40`} value={qualForm.line} onChange={(e) => changeQualLine(e.target.value)}>
+                <option value="">— เลือก Line —</option>
+                {dashLines.map((l) => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className={label}>Station</label>
+              <select className={`${input} w-72`} value={qualForm.station} disabled={!qualForm.line}
+                onChange={(e) => setQualForm((p) => ({ ...p, station: e.target.value }))}>
+                <option value="">— เลือก Station —</option>
+                {qualLineStations.map((s) => (
+                  <option key={s.id} value={s.id}>{s.id}{s.name ? ` — ${s.name}` : ""}</option>
+                ))}
+              </select>
+            </div>
+            <button type="button" className={btnPrimary} onClick={addQualStation} disabled={!qualForm.line || !qualForm.station}>
+              + เพิ่มเกณฑ์
+            </button>
+          </div>
+
+          <div className="space-y-2">
+            {qualStations.map((q) => {
+              const exams = qualExams[qualKey(q)];
+              return (
+                <div key={qualKey(q)} className={`flex flex-wrap items-start justify-between gap-2 p-3 rounded-xl ${isDarkMode ? "bg-slate-900" : "bg-gray-50"}`}>
+                  <div className="text-xs space-y-1">
+                    <div className={`font-bold ${textMain}`}>{q.line} / {q.station}</div>
+                    <div className="text-gray-400">
+                      {!exams
+                        ? "กำลังโหลดเกณฑ์..."
+                        : exams.error
+                          ? <span className="text-rose-500">{exams.error}</span>
+                          : exams.length === 0
+                            ? "ไม่มีข้อสอบบังคับ (ผ่านทุกคน)"
+                            : exams.map((e) => `${String(e.file_name || e.config_key).replace(".xlsx", "")} ≥ ${Number(e.min_score) || 80}`).join(", ")}
+                    </div>
+                  </div>
+                  <button type="button" className="px-3 py-2 rounded-xl text-xs font-bold border border-rose-500/40 text-rose-500 hover:bg-rose-500/10"
+                    onClick={() => removeQualStation(q)}>
+                    ลบ
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     );
   };
@@ -1089,6 +1222,7 @@ export default function MesUpdate({ isDarkMode = false }) {
         onLoggedIn={applyOperatorAuth}
         onOpenSettings={openSettings}
         terminal={terminal}
+        qualStations={qualStations}
         message={message?.type === "error" ? message.text : ""}
       />
     );

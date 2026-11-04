@@ -3,13 +3,14 @@ import { deviceId } from "../../socket";
 // เรียก API ของหน้า MES Update ที่ใช้ร่วมกันหลายไฟล์
 const API_URL = "/api";
 
+// qualStations = เกณฑ์ความสามารถของเครื่องนี้ [{ line, station }] (ว่าง = เช็คแค่เคยทำข้อสอบ)
 // คืน { auth } เมื่อสำเร็จ หรือ { error }
-export const operatorLogin = async (employeeId, terminal = "") => {
+export const operatorLogin = async (employeeId, terminal = "", qualStations = []) => {
   try {
     const res = await fetch(`${API_URL}/mes/operator-login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ employee_id: employeeId, device_id: deviceId, terminal }),
+      body: JSON.stringify({ employee_id: employeeId, device_id: deviceId, terminal, qual_stations: qualStations }),
     });
     const data = await res.json().catch(() => ({}));
     if (!data.success) return { error: data.message || `เข้าสู่ระบบไม่สำเร็จ (HTTP ${res.status})` };
