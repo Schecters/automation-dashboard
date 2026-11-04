@@ -277,7 +277,11 @@ export default function MesUpdate({ isDarkMode = false }) {
   }, [canRead, stationLines, moByLine, fetchMoList]);
 
   useEffect(() => {
-    const onUpdated = () => fetchLogs();
+    // server แจ้งทุกเครื่อง -> โหลด log ใหม่เฉพาะเครื่องที่เป็นคนส่ง (log ของเครื่องอื่นไม่ได้แสดงที่นี่อยู่แล้ว)
+    const onUpdated = (evt) => {
+      if (evt?.terminal && evt.terminal !== terminalRef.current) return;
+      fetchLogs();
+    };
     socket.on("mes_updated", onUpdated);
     return () => socket.off("mes_updated", onUpdated);
   }, [fetchLogs]);
