@@ -7,9 +7,11 @@ export let isLoginSessionActive = false;
 export let isSyncing = false;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-export const BROWSER_SESSION_DIR = path.resolve('C:/Website/Automation 1.0.1/browser_profile');
+// โฟลเดอร์โปรเจกต์ (บน server = C:\Website\Automation 1.0.1) — ไม่เขียน path ตายตัว เครื่อง dev จะได้ใช้ได้ด้วย
+export const PROJECT_ROOT = path.resolve(__dirname, '../../..');
+export const BROWSER_SESSION_DIR = path.join(PROJECT_ROOT, 'browser_profile');
 export const STORAGE_STATE_PATH = path.join(BROWSER_SESSION_DIR, 'storage_state.json');
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+dotenv.config({ path: path.join(PROJECT_ROOT, '.env') });
 
 export const SALT_ROUNDS = 10;
 export const PORT = process.env.PORT_USER || 5000;
@@ -33,19 +35,19 @@ export const MES_INPUT_UPDATE_PATH = '/' + String(process.env.MES_INPUT_UPDATE_P
 // ==========================================
 // 📁 เตรียมโฟลเดอร์สำหรับจัดเก็บไฟล์
 // ==========================================
-export const uploadDir = path.resolve(__dirname, '../../../uploads');
+export const uploadDir = path.join(PROJECT_ROOT, 'uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
 // 🟢 โฟลเดอร์เก็บรูปภาพผัง Layout
-export const layoutImgDir = path.resolve('C:/Website/Automation 1.0.1/img/Layout');
+export const layoutImgDir = path.join(PROJECT_ROOT, 'img', 'Layout');
 if (!fs.existsSync(layoutImgDir)) {
   fs.mkdirSync(layoutImgDir, { recursive: true });
 }
 
 // 🟢 โฟลเดอร์ assets (เก็บรูปพนักงาน)
-export const assetsDir = path.resolve('C:/Website/Automation 1.0.1/src/assets');
+export const assetsDir = path.join(PROJECT_ROOT, 'src', 'assets');
 if (!fs.existsSync(assetsDir)) {
   fs.mkdirSync(assetsDir, { recursive: true });
 }

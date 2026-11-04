@@ -5,6 +5,7 @@ import { pool } from '../lib/db.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { recordAuditLog } from '../lib/audit.js';
 import { uploadLayout } from '../lib/uploads.js';
+import { layoutImgDir } from '../lib/config.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -19,7 +20,7 @@ router.post('/api/layout/upload-image', authenticateToken, requireAdmin, (req, r
   });
 }, async (req, res) => {
   try {
-    const targetDir = path.resolve('C:/Website/Automation 1.0.1/img/Layout');
+    const targetDir = layoutImgDir;
     if (!fs.existsSync(targetDir)) {
       fs.mkdirSync(targetDir, { recursive: true });
     }
@@ -59,7 +60,7 @@ router.post('/api/layout/upload-image', authenticateToken, requireAdmin, (req, r
       deviceId: req.user?.device_id || null,
       action: 'UPLOAD_LAYOUT_IMAGE',
       target: `Layout Image (${fileName})`,
-      details: `Saved photo file to C:/Website/Automation 1.0.1/img/Layout/${fileName}`,
+      details: `Saved photo file to ${path.join(layoutImgDir, fileName)}`,
       ipAddress: getClientIp(req),
     });
 

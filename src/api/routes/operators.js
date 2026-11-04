@@ -5,6 +5,7 @@ import { pool } from '../lib/db.js';
 import { io } from '../lib/realtime.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { recordAuditLog } from '../lib/audit.js';
+import { assetsDir } from '../lib/config.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -156,7 +157,7 @@ router.post('/api/operator-photo', authenticateToken, async (req, res) => {
   const userRole = String(req.user?.role || '').toLowerCase().trim();
 
   try {
-    const targetDir = path.resolve('C:/Website/Automation 1.0.1/src/assets');
+    const targetDir = assetsDir;
     
     if (!fs.existsSync(targetDir)) {
       fs.mkdirSync(targetDir, { recursive: true });

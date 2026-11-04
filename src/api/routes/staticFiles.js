@@ -18,7 +18,7 @@ router.use('/api/operator-images', (req, res, next) => {
   const cleanPath = req.path.replace(/^\/+/, '');
   const assetFilePath = path.join(assetsDir, cleanPath);
   const layoutFilePath = path.join(layoutImgDir, cleanPath);
-  const fallbackFilePath = path.resolve('C:/Website/Automation 1.0.1/src/assets/unknow.jpg');
+  const fallbackFilePath = path.join(assetsDir, 'unknow.jpg');
 
   if (fs.existsSync(assetFilePath) && fs.statSync(assetFilePath).isFile()) {
     return res.sendFile(assetFilePath);
