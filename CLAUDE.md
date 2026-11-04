@@ -67,6 +67,27 @@ git commit -m "[server] $msg"
 git push
 ```
 
+## 🗂️ หน้าเว็บ ↔ API (แยกโฟลเดอร์ตามเรื่อง)
+
+หน้าเว็บอยู่ที่ `src/components/<เรื่อง>/` ส่วน API อยู่ที่ `src/api/routes/` (ฟังก์ชันที่ใช้ร่วมกันอยู่ `src/api/lib/`)
+เพิ่มหน้าใหม่ให้วางในโฟลเดอร์ของเรื่องนั้น ถ้าเป็นเรื่องใหม่ให้สร้างโฟลเดอร์ใหม่
+
+| โฟลเดอร์หน้าเว็บ | หน้า | API (`src/api/routes/`) |
+|---|---|---|
+| `lines/` | LinesAndStation | `lines.js`, `stations.js` |
+| `operators/` | OperatorContent, PhotoOperator | `operators.js`, `operatorData.js` (+ คะแนน Excel ใน `excelGraph.js`) |
+| `layout/` | LayoutViewerContent, LayoutEditorContent | `layout.js`, `stationAssignments.js` |
+| `tasks/` | TaskContent, RepairTaskContent, KnowledgeContent | `tasks.js` |
+| `pm/` | DailyCheckList, PmChecklistBuilder | `pmChecklist.js` |
+| `excel/` | ExcelSearchContent, AutoTriggerExcel | `excelConfigs.js`, `excelGraph.js` |
+| `plc/` | StepCustom | `plc.js` |
+| `users/` | UserManagementContent, AuditLogContent | `users.js`, `auth.js` |
+| `mes/` | MesUpdate (+ `pages/MesLogin.jsx`) | `mes.js` + `lib/mesClient.js`, `lib/mesLog.js`, `lib/operatorExams.js` |
+| `dashboard/` | OverallContent (ภาพรวม ดึงหลายเรื่อง), ApiDocContent (คู่มือ API) | หลายไฟล์ |
+| `common/` | NotificationBell, DarkModeToggle | `notifications.js` |
+
+หน้าหลัก (`src/pages/Home.jsx`) เป็นตัวโหลดหน้าเหล่านี้ / `src/pages/Login.jsx` ใช้ `auth.js`
+
 ## 📌 ข้อมูลระบบที่ควรรู้
 
 - API ทั้งหมดรวมอยู่ที่ port **5000** (`src/api/server.js`) — port 3000 (`excel.js`) เลิกใช้แล้ว

@@ -5,22 +5,22 @@ import { socket } from "../socket";
 // 🟢 Components (lazy load: โหลดไฟล์ของแต่ละหน้าเฉพาะตอนเปิดแท็บนั้น ทำให้เปิดเว็บครั้งแรกเร็วขึ้น
 //    เช่น Konva ของหน้า Layout จะไม่ถูกโหลดถ้าไม่ได้เปิดหน้า Layout)
 const OverallContent = lazy(() => import("../components/dashboard/OverallContent"));
-const LinesAndStation = lazy(() => import("../components/dashboard/LinesAndStation"));
-const UserManagementContent = lazy(() => import("../components/dashboard/UserManagementContent"));
-const AuditLogContent = lazy(() => import("../components/dashboard/AuditLogContent"));
-const OperatorContent = lazy(() => import("../components/dashboard/OperatorContent"));
-const LayoutViewerContent = lazy(() => import("../components/dashboard/LayoutViewerContent"));
-const LayoutEditorContent = lazy(() => import("../components/dashboard/LayoutEditorContent"));
-const TaskContent = lazy(() => import("../components/dashboard/TaskContent"));
-const RepairTaskContent = lazy(() => import("../components/dashboard/RepairTaskContent"));
-const KnowledgeContent = lazy(() => import("../components/dashboard/KnowledgeContent"));
-const ExcelSearchContent = lazy(() => import("../components/dashboard/ExcelSearchContent"));
-const PhotoOperator = lazy(() => import("../components/dashboard/PhotoOperator"));
-const AutoTriggerExcel = lazy(() => import("../components/dashboard/AutoTriggerExcel"));
-const StepCustom = lazy(() => import("../components/dashboard/StepCustom"));
+const LinesAndStation = lazy(() => import("../components/lines/LinesAndStation"));
+const UserManagementContent = lazy(() => import("../components/users/UserManagementContent"));
+const AuditLogContent = lazy(() => import("../components/users/AuditLogContent"));
+const OperatorContent = lazy(() => import("../components/operators/OperatorContent"));
+const LayoutViewerContent = lazy(() => import("../components/layout/LayoutViewerContent"));
+const LayoutEditorContent = lazy(() => import("../components/layout/LayoutEditorContent"));
+const TaskContent = lazy(() => import("../components/tasks/TaskContent"));
+const RepairTaskContent = lazy(() => import("../components/tasks/RepairTaskContent"));
+const KnowledgeContent = lazy(() => import("../components/tasks/KnowledgeContent"));
+const ExcelSearchContent = lazy(() => import("../components/excel/ExcelSearchContent"));
+const PhotoOperator = lazy(() => import("../components/operators/PhotoOperator"));
+const AutoTriggerExcel = lazy(() => import("../components/excel/AutoTriggerExcel"));
+const StepCustom = lazy(() => import("../components/plc/StepCustom"));
 const Api = lazy(() => import("../components/dashboard/ApiDocContent")); // 🟢 Api
-const DailyCheckList = lazy(() => import("../components/dashboard/DailyCheckList"));
-const PmChecklistBuilder = lazy(() => import("../components/dashboard/PmChecklistBuilder"));
+const DailyCheckList = lazy(() => import("../components/pm/DailyCheckList"));
+const PmChecklistBuilder = lazy(() => import("../components/pm/PmChecklistBuilder"));
 
 // 🟢 Common
 import NotificationBell from "../components/common/NotificationBell";

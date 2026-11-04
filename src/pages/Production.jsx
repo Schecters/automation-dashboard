@@ -2,9 +2,9 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { socket } from "../socket";
 
-// 🟢 Import คอมโพเนนต์ย่อยจากโฟลเดอร์ src/components/dashboard
-import OperatorContent from "../components/dashboard/OperatorContent";
-import LayoutEditorContent from "../components/dashboard/LayoutEditorContent";
+// 🟢 Import คอมโพเนนต์ย่อยจาก src/components/<เรื่อง>
+import OperatorContent from "../components/operators/OperatorContent";
+import LayoutEditorContent from "../components/layout/LayoutEditorContent";
 
 function Production({ isDarkMode, setIsDarkMode }) {
   const navigate = useNavigate();
