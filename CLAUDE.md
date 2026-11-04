@@ -82,7 +82,7 @@ git push
 - MES Update: เปิดที่ `https://10.204.206.1:5173/MES` เท่านั้น (ไม่มีเมนูใน dashboard) หน้า login `src/pages/MesLogin.jsx`,
   หน้าใช้งาน `src/components/mes/MesUpdate.jsx`, API `src/api/routes/mes.js` — **ไม่ใช้ Database**
   - operator login ด้วยรหัสพนักงาน ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดก็ได้ใน `auth.excel_configs`
-    ฟังก์ชัน `findOperatorExams` ใน `operatorData.js`, เรียกตรงได้ที่ `/api/operator-exam-check?employee_id=`)
+    ฟังก์ชัน `findOperatorExams` ใน `src/api/lib/operatorExams.js`, เรียกตรงได้ที่ `/api/operator-exam-check?employee_id=`)
     ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
     ดู Line / Station / WO (lineinfo, molist) ใช้รหัสกลาง `MES_QUERY_EMP_NO` (default 86727533) / routing-update ใช้รหัส operator ที่ login

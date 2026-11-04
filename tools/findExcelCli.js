@@ -8,7 +8,7 @@ import { TokenCredentialAuthenticationProvider } from "@microsoft/microsoft-grap
 // 1. โหลดตัวแปรจากไฟล์ .env ที่ Root โฟลเดอร์
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const { TENANT_ID, CLIENT_ID, TARGET_USER_EMAIL } = process.env;
 
@@ -23,9 +23,9 @@ const searchFileName = args.join(" ").trim();
 
 if (!searchFileName) {
   console.log("\n⚠️  วิธีใช้งาน:");
-  console.log('   node .\\src\\api\\findExcelCli.js "ชื่อไฟล์.xlsx"\n');
+  console.log('   node .\\tools\\findExcelCli.js "ชื่อไฟล์.xlsx"\n');
   console.log("ตัวอย่าง:");
-  console.log('   node .\\src\\api\\findExcelCli.js "ข้อสอบ 2.xlsx"\n');
+  console.log('   node .\\tools\\findExcelCli.js "ข้อสอบ 2.xlsx"\n');
   process.exit(1);
 }
 

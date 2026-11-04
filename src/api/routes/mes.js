@@ -5,7 +5,7 @@ import { JWT_SECRET, MES_QUERY_EMP_NO } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs } from '../lib/mesLog.js';
-import { findOperatorExams } from './operatorData.js';
+import { findOperatorExams } from '../lib/operatorExams.js';
 import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
 
 const router = express.Router();
