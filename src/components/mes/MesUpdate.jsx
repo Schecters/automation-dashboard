@@ -18,6 +18,19 @@ const MES_MODBUS_KEY = "mesModbus"; // การเชื่อมต่อเ�
 // เกณฑ์ความสามารถ operator ของเครื่องนี้ [{ line, station }] จาก Lines & Stations ของ dashboard (ว่าง = เช็คแค่เคยทำข้อสอบ)
 const MES_QUAL_KEY = "mesQualStations";
 const qualKey = (q) => `${q.line}|${q.station}`;
+// การส่งหลาย station ของเครื่องนี้: delay_sec = รอกี่วินาทีก่อนส่ง station ถัดไป,
+// continue_on_error = station ไหนส่งไม่สำเร็จ ก็ส่ง station ถัดไปต่อ
+const MES_SEND_KEY = "mesSendOptions";
+const DEFAULT_SEND_OPTIONS = { delay_sec: 0, continue_on_error: true };
+const MAX_DELAY_SEC = 60;
+const loadSendOptions = (v) => {
+  const delay = Number(v?.delay_sec);
+  return {
+    delay_sec: Number.isFinite(delay) ? Math.min(MAX_DELAY_SEC, Math.max(0, delay)) : DEFAULT_SEND_OPTIONS.delay_sec,
+    continue_on_error: typeof v?.continue_on_error === "boolean" ? v.continue_on_error : DEFAULT_SEND_OPTIONS.continue_on_error,
+  };
+};
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const POLL_INTERVAL_MS = 700;
 const STAFF_ROLES = ["admin", "me"];
 
@@ -155,6 +168,8 @@ export default function MesUpdate({ isDarkMode = false }) {
   const [testResult, setTestResult] = useState(null);
   const [saving, setSaving] = useState(false);
   const [qualStations, setQualStations] = useState(() => loadJson(MES_QUAL_KEY, []));
+  const [sendOptions, setSendOptions] = useState(() => loadSendOptions(loadJson(MES_SEND_KEY, null)));
+  const [delayInput, setDelayInput] = useState(() => String(sendOptions.delay_sec));
   const [dashLines, setDashLines] = useState([]); // Line จาก dashboard (ไม่ใช่จาก MES)
   const [qualForm, setQualForm] = useState({ line: "", station: "" });
   const [qualLineStations, setQualLineStations] = useState([]);
@@ -173,6 +188,7 @@ export default function MesUpdate({ isDarkMode = false }) {
   const manualRef = useRef(null);
   const terminalRef = useRef(terminal);
   const modbusCfgRef = useRef(modbusCfg);
+  const sendOptionsRef = useRef(sendOptions);
 
   // ให้ loop อ่านสแกน / callback เห็นค่าล่าสุด (effect นี้ประกาศก่อน effect อื่น จึงรันก่อน)
   useEffect(() => {
@@ -182,7 +198,8 @@ export default function MesUpdate({ isDarkMode = false }) {
     mesAuthRef.current = mesAuth;
     terminalRef.current = terminal;
     modbusCfgRef.current = modbusCfg;
-  }, [stations, locked, failArmed, mesAuth, terminal, modbusCfg]);
+    sendOptionsRef.current = sendOptions;
+  }, [stations, locked, failArmed, mesAuth, terminal, modbusCfg, sendOptions]);
 
   const operatorHeaders = useCallback(
     () => ({ "Content-Type": "application/json", Authorization: `Bearer ${mesAuthRef.current?.token || ""}` }),
@@ -331,30 +348,43 @@ export default function MesUpdate({ isDarkMode = false }) {
 
       let allOk = true;
       let sentPass = false; // มี station ที่ส่ง PASS / INPUT สำเร็จจริง (ไม่นับที่ข้ามเพราะซ้ำ)
+      const { delay_sec: delaySec, continue_on_error: continueOnError } = sendOptionsRef.current;
+      let calledMes = false; // station ก่อนหน้าเรียก MES จริง (ไม่ใช่ข้ามเพราะซ้ำ) -> ต้องรอ delay ก่อนส่ง station ถัดไป
       try {
         for (let i = 0; i < targets.length; i++) {
           const st = targets[i];
+          if (calledMes && delaySec > 0) {
+            setStationRuntime(st.id, { sn, status: "waiting", text: `รอ ${delaySec} วินาที ก่อนส่ง` });
+            await wait(delaySec * 1000);
+            if (!mesAuthRef.current) return false; // ออกจากระบบระหว่างรอ
+          }
           const inputMode = isInputMode(st);
           const result = inputMode ? "INPUT" : failArmedRef.current.has(st.id) ? "FAIL" : "PASS";
           setStationRuntime(st.id, { sn, result, status: "sending", text: `กำลังส่ง ${result}...` });
-          const upd = await fetch(`${API_URL}/mes/update-route`, {
-            method: "POST",
-            headers: operatorHeaders(),
-            body: JSON.stringify({
-              terminal: terminalRef.current,
-              sn,
-              result,
-              mode: inputMode ? "input" : "routing",
-              barcode_prefix: inputMode ? st.barcode_prefix || "" : undefined,
-              barcode_length: inputMode ? Number(st.barcode_length) || 0 : undefined,
-              line: st.line,
-              station: st.station,
-              group: st.group_name,
-              mo: st.mo,
-            }),
-          });
-          if (await handleOperator401(upd)) return false;
-          const out = await upd.json();
+          let out;
+          try {
+            const upd = await fetch(`${API_URL}/mes/update-route`, {
+              method: "POST",
+              headers: operatorHeaders(),
+              body: JSON.stringify({
+                terminal: terminalRef.current,
+                sn,
+                result,
+                mode: inputMode ? "input" : "routing",
+                barcode_prefix: inputMode ? st.barcode_prefix || "" : undefined,
+                barcode_length: inputMode ? Number(st.barcode_length) || 0 : undefined,
+                line: st.line,
+                station: st.station,
+                group: st.group_name,
+                mo: st.mo,
+              }),
+            });
+            if (await handleOperator401(upd)) return false;
+            out = await upd.json();
+          } catch (err) {
+            // ต่อ server ไม่ได้ / ตอบกลับผิดรูปแบบ -> นับเป็นไม่สำเร็จของ station นี้
+            out = { success: false, message: `ส่งไป MES ไม่สำเร็จ: ${err.message}` };
+          }
           setStationRuntime(st.id, {
             sn,
             result,
@@ -364,10 +394,12 @@ export default function MesUpdate({ isDarkMode = false }) {
               : `${out.message || "Update ไม่สำเร็จ"}${out.mes_response ? ` — ${out.mes_response}` : ""}`,
           });
 
+          calledMes = !(out.success && out.skipped);
           const rest = targets.slice(i + 1);
           if (!out.success) {
-            // station นี้ไม่ผ่าน -> ไม่ส่ง station ถัดไป (MES ต้องผ่านตามลำดับ)
             allOk = false;
+            // ตั้งค่า "ส่งต่อแม้ไม่สำเร็จ" -> ส่ง station ถัดไปต่อ / ไม่ตั้ง -> หยุด
+            if (continueOnError) continue;
             rest.forEach((r) => setStationRuntime(r.id, { sn, status: "stopped", text: "ไม่ได้ส่ง (station ก่อนหน้าไม่สำเร็จ)" }));
             break;
           }
@@ -646,6 +678,24 @@ export default function MesUpdate({ isDarkMode = false }) {
     setTerminal(name);
     setLogs([]);
     setMessage({ type: "ok", text: `เครื่องนี้ใช้ชื่อ "${name}" แล้ว` });
+  };
+
+  // การส่งหลาย station (delay / ส่งต่อแม้ไม่สำเร็จ)
+  const updateSendOptions = (patch) => {
+    const next = loadSendOptions({ ...sendOptions, ...patch });
+    saveJson(MES_SEND_KEY, next);
+    setSendOptions(next);
+    setDelayInput(String(next.delay_sec));
+    return next;
+  };
+  const applyDelay = () => {
+    const v = Number(delayInput);
+    if (!Number.isFinite(v) || v < 0 || v > MAX_DELAY_SEC) {
+      setMessage({ type: "error", text: `Delay ต้องเป็นตัวเลข 0 - ${MAX_DELAY_SEC} วินาที` });
+      return;
+    }
+    const next = updateSendOptions({ delay_sec: Math.round(v * 10) / 10 });
+    setMessage({ type: "ok", text: next.delay_sec > 0 ? `ส่ง station ถัดไปหลังรอ ${next.delay_sec} วินาที` : "ไม่รอ (ส่ง station ถัดไปทันที)" });
   };
 
   const saveModbus = async (e) => {
@@ -1169,6 +1219,42 @@ export default function MesUpdate({ isDarkMode = false }) {
               );
             })}
           </div>
+        </div>
+
+        {/* 5) การส่งหลาย station */}
+        <div className={`rounded-2xl border p-4 space-y-3 ${card}`}>
+          <div className={`text-sm font-bold ${textMain}`}>5. การส่งไปหลาย station</div>
+          <p className="text-[11px] text-gray-400">
+            สแกน 1 ครั้งส่งให้ทุก station ที่ Lock ตามลำดับบนลงล่าง — ตั้งเวลารอระหว่าง station และให้ส่งต่อเมื่อ station ก่อนหน้าไม่สำเร็จ
+          </p>
+          <div className="flex flex-wrap items-end gap-2">
+            <div>
+              <label className={label}>Delay ก่อนส่ง station ถัดไป (วินาที)</label>
+              <input className={`${input} w-40`} type="number" min="0" max={MAX_DELAY_SEC} step="0.1"
+                value={delayInput} onChange={(e) => setDelayInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") applyDelay(); }} />
+            </div>
+            <button type="button" className={btnPrimary} onClick={applyDelay}
+              disabled={delayInput === "" || Number(delayInput) === sendOptions.delay_sec}>
+              บันทึก Delay
+            </button>
+            <span className="text-[11px] text-gray-400 pb-2">
+              ตอนนี้: {sendOptions.delay_sec > 0 ? `รอ ${sendOptions.delay_sec} วินาที` : "ไม่รอ"} (0 = ส่งทันที)
+            </span>
+          </div>
+          <label className={`flex items-start gap-2 text-xs cursor-pointer ${textMain}`}>
+            <input type="checkbox" className="mt-0.5" checked={sendOptions.continue_on_error}
+              onChange={(e) => {
+                const next = updateSendOptions({ continue_on_error: e.target.checked });
+                setMessage({ type: "ok", text: next.continue_on_error ? "station ไม่สำเร็จ จะส่ง station ถัดไปต่อ" : "station ไม่สำเร็จ จะหยุดไม่ส่ง station ถัดไป" });
+              }} />
+            <span>
+              ส่ง station ถัดไปต่อ แม้ station ก่อนหน้าส่งไม่สำเร็จ
+              <span className="block text-[11px] text-gray-400">
+                ไม่ติ๊ก = หยุดที่ station ที่ไม่สำเร็จ / กด FAIL แล้ว ยังหยุดที่ station ที่ส่ง FAIL เหมือนเดิม
+              </span>
+            </span>
+          </label>
         </div>
       </div>
     );

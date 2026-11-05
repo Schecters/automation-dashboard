@@ -116,8 +116,10 @@ git push
     (เครื่องสแกนอยู่ network ของ PC นั้น เช่น 192.168.1.x server เข้าไม่ถึง / เบราว์เซอร์ต่อ TCP เองไม่ได้)
     2 แบบ: TCP data port เช่น 9004 (Keyence SR) หรือ Modbus TCP — server ไม่ได้ต่อเครื่องสแกนแล้ว
     ถ้าเปลี่ยน URL เว็บ ต้องเพิ่มใน `MES_BRIDGE_ORIGINS` ของ Bridge
-    สแกน 1 ครั้ง → ส่งให้ทุก station ที่ Lock ตามลำดับบนลงล่าง (หยุดเมื่อ station ใดไม่สำเร็จ หรือส่ง FAIL แล้ว)
-  - การตั้งค่าของแต่ละเครื่อง เก็บในเบราว์เซอร์เครื่องนั้น: `mesTerminal` (ชื่อเครื่อง), `mesModbus`, `mesStations`, `mesQualStations` (เกณฑ์ความสามารถ)
+    สแกน 1 ครั้ง → ส่งให้ทุก station ที่ Lock ตามลำดับบนลงล่าง รอ `delay_sec` วินาทีระหว่าง station (ตั้งต่อเครื่อง, 0 = ทันที)
+    station ไม่สำเร็จ → ส่ง station ถัดไปต่อ (`continue_on_error`, default เปิด / ปิด = หยุด) / ส่ง FAIL แล้วหยุดเสมอ
+  - การตั้งค่าของแต่ละเครื่อง เก็บในเบราว์เซอร์เครื่องนั้น: `mesTerminal` (ชื่อเครื่อง), `mesModbus`, `mesStations`, `mesQualStations` (เกณฑ์ความสามารถ),
+    `mesSendOptions` (`{ delay_sec, continue_on_error }`)
     แก้ได้เฉพาะ ME, admin (หน้าตั้งค่าต้อง login) / ล้างข้อมูลเบราว์เซอร์ = ต้องตั้งค่าใหม่
   - ประวัติการส่ง: ไฟล์ CSV ที่ `MES_LOG_DIR` (default `D:\MES logs`) — `YYYY-MM-DD.csv` และ `login_YYYY-MM.csv` (`src/api/lib/mesLog.js`)
   - ตาราง `automation_lines.mes_*` ที่เคยสร้างไว้รุ่นก่อน เลิกใช้แล้ว (ลบได้)
