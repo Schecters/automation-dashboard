@@ -110,18 +110,18 @@ git push
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
     ดู Line / Station / WO (lineinfo, molist) ใช้รหัสกลาง `MES_QUERY_EMP_NO` (default 86727533) / routing-update ใช้รหัส operator ที่ login
     ส่งแต่ละ station: POST /api/mes/tdc/routing-check (ต้อง OK) แล้วค่อย POST /api/mes/tdc/typed/routing-update (testData "")
-    รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1` (`buildRoutingRow`) ปกติ PASS, กดปุ่ม FAIL แล้วสแกน = FAIL
+    รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1` (`buildRoutingRow`) หน้าเว็บส่ง PASS อย่างเดียว (เอาปุ่ม FAIL ออกแล้ว — API ยังรับ FAIL ได้)
   - รับ QR จาก Keyence: **PC หน้าไลน์ต่อเครื่องสแกนเอง** ผ่านโปรแกรม MES Bridge (`tools/mes-bridge/mes-bridge.cjs`,
     เปิดด้วย `start-mes-bridge.bat`, ต้องมี Node.js ไม่ต้องลง package) ฟังที่ `http://127.0.0.1:18080` หน้าเว็บเรียกตรง
     (เครื่องสแกนอยู่ network ของ PC นั้น เช่น 192.168.1.x server เข้าไม่ถึง / เบราว์เซอร์ต่อ TCP เองไม่ได้)
     2 แบบ: TCP data port เช่น 9004 (Keyence SR) หรือ Modbus TCP — server ไม่ได้ต่อเครื่องสแกนแล้ว
     ถ้าเปลี่ยน URL เว็บ ต้องเพิ่มใน `MES_BRIDGE_ORIGINS` ของ Bridge
     สแกน 1 ครั้ง → ส่งให้ทุก station ที่ Lock ตามลำดับบนลงล่าง รอ `delay_sec` วินาทีระหว่าง station (ตั้งต่อเครื่อง, 0 = ทันที)
-    station ไม่สำเร็จ → ส่ง station ถัดไปต่อ (`continue_on_error`, default เปิด / ปิด = หยุด) / ส่ง FAIL แล้วหยุดเสมอ
+    station ไม่สำเร็จ → ส่ง station ถัดไปต่อ (`continue_on_error`, default เปิด / ปิด = หยุด)
   - การตั้งค่าของแต่ละเครื่อง เก็บในเบราว์เซอร์เครื่องนั้น: `mesTerminal` (ชื่อเครื่อง), `mesModbus`, `mesStations`, `mesQualStations` (เกณฑ์ความสามารถ),
     `mesSendOptions` (`{ delay_sec, continue_on_error }`)
     แก้ได้เฉพาะ ME, admin (หน้าตั้งค่าต้อง login) / ล้างข้อมูลเบราว์เซอร์ = ต้องตั้งค่าใหม่
   - ประวัติการส่ง: ไฟล์ CSV ที่ `MES_LOG_DIR` (default `D:\MES logs`) — `YYYY-MM-DD.csv` และ `login_YYYY-MM.csv` (`src/api/lib/mesLog.js`)
   - ยอด OK / NG ของกะปัจจุบัน (กะเช้า 07:40-19:40 / กะดึก 19:40-07:40) นับจากไฟล์ CSV เดียวกัน เฉพาะที่ส่งสำเร็จ
-    (OK = PASS/INPUT, NG = FAIL) แสดงเป็นป้ายที่แต่ละ station: `GET /api/mes/shift-summary?terminal=` (`readShiftSummary`)
+    (OK = PASS/INPUT, NG = FAIL) แสดงเป็นกล่องใหญ่ข้างปุ่ม Lock ของแต่ละ station: `GET /api/mes/shift-summary?terminal=` (`readShiftSummary`)
   - ตาราง `automation_lines.mes_*` ที่เคยสร้างไว้รุ่นก่อน เลิกใช้แล้ว (ลบได้)

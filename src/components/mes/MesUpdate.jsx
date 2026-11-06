@@ -546,15 +546,6 @@ export default function MesUpdate({ isDarkMode = false }) {
     if (scan?.sn) processScan(scan.sn, scan.source);
   };
 
-  const toggleFail = (st) => {
-    setFailArmed((prev) => {
-      const next = new Set(prev);
-      if (next.has(st.id)) next.delete(st.id);
-      else next.add(st.id);
-      return next;
-    });
-  };
-
   const toggleLock = (st) => {
     if (!locked.has(st.id) && !st.mo) {
       setMessage({ type: "error", text: `กรุณาเลือก WO ของ ${st.label || st.station} ก่อน Lock` });
@@ -1269,7 +1260,7 @@ export default function MesUpdate({ isDarkMode = false }) {
             <span>
               ส่ง station ถัดไปต่อ แม้ station ก่อนหน้าส่งไม่สำเร็จ
               <span className="block text-[11px] text-gray-400">
-                ไม่ติ๊ก = หยุดที่ station ที่ไม่สำเร็จ / กด FAIL แล้ว ยังหยุดที่ station ที่ส่ง FAIL เหมือนเดิม
+                ไม่ติ๊ก = หยุดที่ station ที่ไม่สำเร็จ
               </span>
             </span>
           </label>
@@ -1399,14 +1390,13 @@ export default function MesUpdate({ isDarkMode = false }) {
         <div className="space-y-3">
           {stations.map((st, i) => {
             const isLocked = locked.has(st.id);
-            const isFail = isLocked && failArmed.has(st.id);
             const rt = runtime[st.id];
             const mos = moByLine[st.line] || [];
             return (
               <div
                 key={st.id}
                 className={`rounded-2xl border p-4 flex flex-col lg:flex-row lg:items-center gap-3 ${card} ${
-                  isFail ? "ring-2 ring-rose-500" : isLocked ? "ring-2 ring-emerald-500/60" : ""
+                  isLocked ? "ring-2 ring-emerald-500/60" : ""
                 }`}
               >
                 <div className="flex items-center gap-3 lg:w-72 min-w-0">
@@ -1418,10 +1408,6 @@ export default function MesUpdate({ isDarkMode = false }) {
                     <div className="text-[11px] text-gray-400 truncate">
                       <span className="text-blue-400 font-semibold">{st.line}</span> · {st.station}
                       {isInputMode(st) && <span className="text-amber-500 font-semibold"> · INPUT</span>}
-                    </div>
-                    <div className="flex gap-1 mt-1 text-[10px] font-black" title={`ยอดส่ง MES สำเร็จของ station นี้ใน${shiftSummary?.shift === "night" ? "กะดึก (19:40 - 07:40)" : "กะเช้า (07:40 - 19:40)"}`}>
-                      <span className="px-2 py-0.5 rounded-md bg-emerald-600/15 text-emerald-500">OK {shiftCount(st).ok}</span>
-                      <span className="px-2 py-0.5 rounded-md bg-rose-600/15 text-rose-500">NG {shiftCount(st).ng}</span>
                     </div>
                   </div>
                 </div>
@@ -1446,9 +1432,6 @@ export default function MesUpdate({ isDarkMode = false }) {
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  {isFail && (
-                    <div className="text-xs font-black text-rose-500 mb-1">⚠ โหมด FAIL — ชิ้นถัดไปส่ง FAIL ที่ station นี้</div>
-                  )}
                   <div className="flex items-center gap-2">
                     {isLocked ? statusPill(rt) : <span className="text-[11px] text-gray-400">ยังไม่ Lock (ไม่ส่ง)</span>}
                     {isLocked && rt?.sn && <span className={`text-xs font-mono font-bold truncate ${textMain}`}>{rt.sn}</span>}
@@ -1460,22 +1443,23 @@ export default function MesUpdate({ isDarkMode = false }) {
                   )}
                 </div>
 
-                {!isInputMode(st) && <button
-                  type="button"
-                  onClick={() => toggleFail(st)}
-                  disabled={!isLocked}
-                  title={isLocked ? "ชิ้นถัดไปที่สแกนจะส่ง FAIL ที่ station นี้" : "ต้อง Lock ก่อน"}
-                  className={`px-5 py-2.5 rounded-xl text-xs font-black shrink-0 disabled:opacity-30 disabled:cursor-not-allowed ${
-                    isFail ? "bg-rose-600 hover:bg-rose-700 text-white" : "border border-rose-500/60 text-rose-500 hover:bg-rose-500/10"
-                  }`}
-                >
-                  {isFail ? "✕ ยกเลิก FAIL" : "✖ FAIL"}
-                </button>}
+                {/* ยอด OK / NG ของ station นี้ในกะนี้ (ส่ง MES สำเร็จ) */}
+                <div className="flex gap-2 shrink-0"
+                  title={`ยอดส่ง MES สำเร็จของ station นี้ใน${shiftSummary?.shift === "night" ? "กะดึก (19:40 - 07:40)" : "กะเช้า (07:40 - 19:40)"}`}>
+                  <div className="w-24 py-1.5 rounded-xl bg-emerald-600 text-white text-center">
+                    <div className="text-[11px] font-black opacity-80 leading-none">OK</div>
+                    <div className="text-3xl font-black leading-tight tabular-nums">{shiftCount(st).ok}</div>
+                  </div>
+                  <div className="w-24 py-1.5 rounded-xl bg-rose-600 text-white text-center">
+                    <div className="text-[11px] font-black opacity-80 leading-none">NG</div>
+                    <div className="text-3xl font-black leading-tight tabular-nums">{shiftCount(st).ng}</div>
+                  </div>
+                </div>
 
                 <button
                   type="button"
                   onClick={() => toggleLock(st)}
-                  className={`px-5 py-2.5 rounded-xl text-xs font-black shrink-0 ${
+                  className={`px-5 py-2.5 self-stretch rounded-xl text-sm font-black shrink-0 ${
                     isLocked ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-slate-500/15 text-gray-500 hover:bg-slate-500/25"
                   }`}
                 >
