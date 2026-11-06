@@ -8,6 +8,7 @@ import stationAssignmentsRoutes from '../routes/stationAssignments.js';
 import operatorsRoutes from '../routes/operators.js';
 import operatorDataRoutes from '../routes/operatorData.js';
 import plcRoutes from '../routes/plc.js';
+import defectsRoutes from '../routes/defects.js';
 
 // 🗂️ ข้อมูลหลัก + API ภายนอก (port 5000 เปิดให้ทั้งวง LAN)
 //  - Line / Station / Layout / พนักงาน / PLC sequence / ไฟล์รูป
@@ -16,7 +17,7 @@ import plcRoutes from '../routes/plc.js';
 //  - service นี้เป็นตัวสร้าง/อัปเดตตารางใน Database (initDatabase) ตัวเดียว
 const { server } = createServiceApp(
   'data',
-  [staticFilesRoutes, linesRoutes, stationsRoutes, operatorsRoutes, layoutRoutes, stationAssignmentsRoutes, plcRoutes, operatorDataRoutes],
+  [staticFilesRoutes, linesRoutes, stationsRoutes, operatorsRoutes, layoutRoutes, stationAssignmentsRoutes, plcRoutes, operatorDataRoutes, defectsRoutes],
   { before: [forwardToOtherServices('data')] }
 );
 

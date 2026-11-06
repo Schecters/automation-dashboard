@@ -6,6 +6,7 @@ import { MES_API_BASE, MES_INPUT_UPDATE_PATH } from './config.js';
 //  - molist   : [{ MO_NUMBER, MODEL_NAME, LINE_NAME }] (พารามิเตอร์ line ของ MES ไม่กรอง ต้องกรองเอง)
 //  - routing-update : POST /api/mes/tdc/typed/routing-update
 //                     { routingData: ["SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1"], testData: "" }
+//                     งานเสีย: FAIL + testData "[SN/FAIL];[CODE/อาการ];[EMPNO]"
 //  - input-update   : POST MES_INPUT_UPDATE_PATH (default /api/mes/tdc/input-update)
 // ==========================================
 
@@ -110,9 +111,15 @@ export const routingCheck = async ({ sn, mo, model, line, section, group, statio
   return { ok: result.toUpperCase() === 'OK', result, description, text };
 };
 
-export const routingUpdate = async (rows) => {
-  // testData เป็นข้อความว่าง "" ตามตัวอย่างจาก MES (ไม่ใช่ [])
-  const payload = { routingData: rows, testData: '' };
+// testData ตอนส่งงานเสีย: [SN/FAIL];[รหัสอาการ/คำอธิบาย];[รหัสพนักงาน]
+// เช่น [ABC123/FAIL];[FMFT00001/Function Test - No turn];[86727533]
+const cleanTestField = (v) => cleanField(v).replace(/[[\];]/g, ' ').replace(/\s+/g, ' ').trim();
+export const buildDefectTestData = ({ sn, defectCode, description, empNo }) =>
+  `[${cleanField(sn)}/FAIL];[${cleanTestField(defectCode)}/${cleanTestField(description)}];[${cleanField(empNo)}]`;
+
+export const routingUpdate = async (rows, testData = '') => {
+  // งานปกติ testData เป็นข้อความว่าง "" ตามตัวอย่างจาก MES (ไม่ใช่ []) / งานเสียใส่ buildDefectTestData
+  const payload = { routingData: rows, testData: String(testData || '') };
   // path ต้องมี / เดียว (แบบ //tdc ได้ 404)
   const result = await mesFetch('/api/mes/tdc/typed/routing-update', {
     method: 'POST',

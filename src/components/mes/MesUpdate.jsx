@@ -164,8 +164,9 @@ export default function MesUpdate({ isDarkMode = false }) {
   const [woProgress, setWoProgress] = useState(null); // { data, error, loading, at }
   const [locked, setLocked] = useState(() => new Set(loadJson(MES_LOCKED_KEY, [])));
   const [runtime, setRuntime] = useState({}); // stationId -> { sn, result, status, text }
-  // station ที่กด FAIL ไว้: ชิ้นถัดไปส่ง PASS ให้ station ก่อนหน้า แล้วส่ง FAIL ที่ station นี้ และหยุด
-  const [failArmed, setFailArmed] = useState(() => new Set());
+  // popup งานเสีย { stationId, station, label, sn, source, codes, loading, error, defectId }
+  // ระหว่างเปิด ผลสแกนจากเครื่องสแกนเข้า popup แทนการส่งปกติ
+  const [defectPopup, setDefectPopup] = useState(null);
 
   // QR ล่าสุด (จาก Modbus หรือ Scanner)
   const [scan, setScan] = useState(null); // { sn, source, at }
@@ -191,7 +192,7 @@ export default function MesUpdate({ isDarkMode = false }) {
 
   const stationsRef = useRef([]);
   const lockedRef = useRef(locked);
-  const failArmedRef = useRef(failArmed);
+  const defectPopupRef = useRef(null);
   const mesAuthRef = useRef(mesAuth);
   const sendingRef = useRef(false);
   const [passPopup, setPassPopup] = useState(false);
@@ -209,13 +210,13 @@ export default function MesUpdate({ isDarkMode = false }) {
   useEffect(() => {
     stationsRef.current = stations;
     lockedRef.current = locked;
-    failArmedRef.current = failArmed;
+    defectPopupRef.current = defectPopup;
     mesAuthRef.current = mesAuth;
     terminalRef.current = terminal;
     modbusCfgRef.current = modbusCfg;
     sendOptionsRef.current = sendOptions;
     woRef.current = wo;
-  }, [stations, locked, failArmed, mesAuth, terminal, modbusCfg, sendOptions, wo]);
+  }, [stations, locked, defectPopup, mesAuth, terminal, modbusCfg, sendOptions, wo]);
 
   const operatorHeaders = useCallback(
     () => ({ "Content-Type": "application/json", Authorization: `Bearer ${mesAuthRef.current?.token || ""}` }),
@@ -237,7 +238,7 @@ export default function MesUpdate({ isDarkMode = false }) {
     setMesAuth(null);
     setLocked(new Set());
     saveJson(MES_LOCKED_KEY, []);
-    setFailArmed(new Set());
+    setDefectPopup(null);
     if (text) setMessage({ type: "error", text });
   }, []);
 
@@ -396,12 +397,22 @@ export default function MesUpdate({ isDarkMode = false }) {
   // ---------- ส่ง QR 1 ตัว ไปทุก station ที่ Lock ตามลำดับบนลงล่าง ----------
   const setStationRuntime = (id, patch) => setRuntime((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
 
+  // defect = { stationId, defectId, code, description } -> งานเสีย: ส่ง station ที่ Lock ก่อนหน้าให้ผ่านก่อน
+  //   แล้วส่ง FAIL + อาการที่ station นั้น และหยุด (station ก่อนหน้าไม่ผ่าน = ไม่ส่ง FAIL)
   const processScan = useCallback(
-    async (rawSn, source) => {
+    async (rawSn, source, defect = null) => {
       // SN ตามที่สแกนได้ทั้งหมด (บาง model มีช่องว่าง เช่น "... Y" ห้ามตัด) ตัดแค่ Enter และ "}"
       const sn = String(rawSn || "").replace(/[}\r\n]/g, "").trim();
       if (!sn || sendingRef.current) return false;
-      const targets = stationsRef.current.filter((s) => lockedRef.current.has(s.id));
+      let targets = stationsRef.current.filter((s) => lockedRef.current.has(s.id));
+      if (defect) {
+        const idx = targets.findIndex((s) => s.id === defect.stationId);
+        if (idx < 0) {
+          setMessage({ type: "error", text: "station ที่จะส่งงานเสียยังไม่ได้ Lock" });
+          return false;
+        }
+        targets = targets.slice(0, idx + 1);
+      }
       if (targets.length === 0) {
         setMessage({ type: "error", text: "ยังไม่ได้ Lock station ใด — กด Lock station ที่จะส่งก่อน" });
         return false;
@@ -424,7 +435,8 @@ export default function MesUpdate({ isDarkMode = false }) {
 
       let allOk = true;
       let sentPass = false; // มี station ที่ส่ง PASS / INPUT สำเร็จจริง (ไม่นับที่ข้ามเพราะซ้ำ)
-      const { delay_sec: delaySec, continue_on_error: continueOnError } = sendOptionsRef.current;
+      const { delay_sec: delaySec, continue_on_error: sendOptContinue } = sendOptionsRef.current;
+      const continueOnError = sendOptContinue && !defect; // งานเสีย: station ก่อนหน้าต้องผ่านก่อน
       let calledMes = false; // station ก่อนหน้าเรียก MES จริง (ไม่ใช่ข้ามเพราะซ้ำ) -> ต้องรอ delay ก่อนส่ง station ถัดไป
       try {
         for (let i = 0; i < targets.length; i++) {
@@ -434,9 +446,16 @@ export default function MesUpdate({ isDarkMode = false }) {
             await wait(delaySec * 1000);
             if (!mesAuthRef.current) return false; // ออกจากระบบระหว่างรอ
           }
-          const inputMode = isInputMode(st);
-          const result = inputMode ? "INPUT" : failArmedRef.current.has(st.id) ? "FAIL" : "PASS";
-          setStationRuntime(st.id, { sn, result, status: "sending", text: `กำลังส่ง ${result}...` });
+          const isDefect = Boolean(defect) && st.id === defect.stationId;
+          // station แบบ input ที่เป็นจุดงานเสีย -> ส่ง FAIL แบบ routing เหมือน station อื่น
+          const inputMode = isInputMode(st) && !isDefect;
+          const result = isDefect ? "FAIL" : inputMode ? "INPUT" : "PASS";
+          setStationRuntime(st.id, {
+            sn,
+            result,
+            status: "sending",
+            text: isDefect ? `กำลังส่งงานเสีย ${defect.code}...` : `กำลังส่ง ${result}...`,
+          });
           let out;
           try {
             const upd = await fetch(`${API_URL}/mes/update-route`, {
@@ -453,6 +472,7 @@ export default function MesUpdate({ isDarkMode = false }) {
                 station: st.station,
                 group: st.group_name,
                 mo: currentWo.mo, // WO เดียวกันทุก station
+                defect_id: isDefect ? defect.defectId : undefined,
               }),
             });
             if (await handleOperator401(upd)) return false;
@@ -476,18 +496,19 @@ export default function MesUpdate({ isDarkMode = false }) {
             allOk = false;
             // ตั้งค่า "ส่งต่อแม้ไม่สำเร็จ" -> ส่ง station ถัดไปต่อ / ไม่ตั้ง -> หยุด
             if (continueOnError) continue;
-            rest.forEach((r) => setStationRuntime(r.id, { sn, status: "stopped", text: "ไม่ได้ส่ง (station ก่อนหน้าไม่สำเร็จ)" }));
+            rest.forEach((r) =>
+              setStationRuntime(r.id, {
+                sn,
+                status: "stopped",
+                text: defect ? "ไม่ได้ส่งงานเสีย (station ก่อนหน้าไม่ผ่าน)" : "ไม่ได้ส่ง (station ก่อนหน้าไม่สำเร็จ)",
+              })
+            );
             break;
           }
           if (result !== "FAIL" && !out.skipped) sentPass = true;
           if (result === "FAIL") {
-            // ชิ้นงาน FAIL ที่ station นี้ -> ไม่ส่ง station ถัดไป และกลับเป็นโหมด PASS
+            // ชิ้นงาน FAIL ที่ station นี้ -> ไม่ส่ง station ถัดไป
             sentPass = false;
-            setFailArmed((prev) => {
-              const next = new Set(prev);
-              next.delete(st.id);
-              return next;
-            });
             rest.forEach((r) => setStationRuntime(r.id, { sn, status: "stopped", text: "ไม่ได้ส่ง (ชิ้นงาน FAIL ก่อนหน้า)" }));
             break;
           }
@@ -508,6 +529,19 @@ export default function MesUpdate({ isDarkMode = false }) {
       return allOk;
     },
     [operatorHeaders, handleOperator401]
+  );
+
+  // ผลสแกน: popup งานเสียเปิดอยู่ -> ใส่ SN ใน popup (ยังไม่ส่ง) / ปกติ -> ส่งทุก station ที่ Lock
+  const routeScan = useCallback(
+    async (rawSn, source) => {
+      if (defectPopupRef.current) {
+        const sn = String(rawSn || "").replace(/[}\r\n]/g, "").trim();
+        if (sn) setDefectPopup((prev) => (prev ? { ...prev, sn, source, error: null } : prev));
+        return true;
+      }
+      return processScan(rawSn, source);
+    },
+    [processScan]
   );
 
   // อ่านเครื่องสแกน (ครั้งเดียวต่อรอบ ไม่ใช่ต่อ station)
@@ -533,7 +567,7 @@ export default function MesUpdate({ isDarkMode = false }) {
         if (cancelled) return false;
         tcpAfterRef.current = item.seq;
         try {
-          await processScan(item.sn, "TCP");
+          await routeScan(item.sn, "TCP");
         } finally {
           // ส่ง MES เสร็จแล้ว -> ให้ Bridge ส่ง QR นี้ต่อให้โปรแกรมอื่นที่ต่อ relay (Bridge รุ่นเก่าไม่มี endpoint นี้ ไม่เป็นไร)
           await bridgeRead("/tcp/release", { host: cfg.modbus_host, port: Number(cfg.tcp_port), seq: item.seq }).catch(() => {});
@@ -558,7 +592,7 @@ export default function MesUpdate({ isDarkMode = false }) {
               lastSeenRef.current = "";
             } else if (sn !== lastSeenRef.current) {
               lastSeenRef.current = sn;
-              await processScan(sn, "Modbus");
+              await routeScan(sn, "Modbus");
             }
           }
         }
@@ -579,7 +613,7 @@ export default function MesUpdate({ isDarkMode = false }) {
       // Unlock ทั้งหมด / ออกจากระบบ / เปลี่ยนการตั้งค่า -> ปิด connection ทันที
       bridgeDisconnect(cfgAtStart);
     };
-  }, [mesAuth, modbusReady, hasLocked, modbusCfg, processScan]);
+  }, [mesAuth, modbusReady, hasLocked, modbusCfg, routeScan]);
 
   // ---------- operator actions ----------
   const applyOperatorAuth = (auth) => {
@@ -596,7 +630,7 @@ export default function MesUpdate({ isDarkMode = false }) {
     }
     const value = manualInput;
     setManualInput("");
-    await processScan(value, "Scanner");
+    await routeScan(value, "Scanner");
     manualRef.current?.focus();
   };
 
@@ -609,13 +643,7 @@ export default function MesUpdate({ isDarkMode = false }) {
       setMessage({ type: "error", text: "กรุณาเลือก WO ด้านบนก่อน Lock" });
       return;
     }
-    if (locked.has(st.id)) {
-      setFailArmed((prev) => {
-        const next = new Set(prev);
-        next.delete(st.id);
-        return next;
-      });
-    }
+    if (locked.has(st.id) && defectPopup?.stationId === st.id) setDefectPopup(null);
     setLocked((prev) => {
       const next = new Set(prev);
       if (next.has(st.id)) next.delete(st.id);
@@ -623,6 +651,43 @@ export default function MesUpdate({ isDarkMode = false }) {
       saveJson(MES_LOCKED_KEY, [...next]);
       return next;
     });
+  };
+
+  // ---------- งานเสีย ----------
+  const openDefect = async (st) => {
+    if (sendingRef.current) {
+      setMessage({ type: "error", text: "กำลังส่งชิ้นก่อนหน้าอยู่ รอสักครู่" });
+      return;
+    }
+    const base = { stationId: st.id, station: st.station, label: st.label || st.station, sn: "", source: "Scanner", codes: [], loading: true, error: null, defectId: null };
+    setDefectPopup(base);
+    try {
+      const res = await fetch(`${API_URL}/mes/defect-codes?station=${encodeURIComponent(st.station)}`, { headers: readHeaders() });
+      if (mesAuthRef.current && (await handleOperator401(res))) return;
+      const data = await res.json().catch(() => ({}));
+      setDefectPopup((prev) =>
+        prev?.stationId !== st.id
+          ? prev
+          : data.success
+            ? { ...prev, codes: data.data, loading: false, error: data.data.length ? null : `ยังไม่มีอาการเสียของ Station ${st.station} — ให้ ME / Q เพิ่มในแท็บ Defect Code ของ dashboard` }
+            : { ...prev, loading: false, error: data.message || `โหลดรายการอาการไม่ได้ (HTTP ${res.status})` }
+      );
+    } catch (err) {
+      setDefectPopup((prev) => (prev?.stationId === st.id ? { ...prev, loading: false, error: `โหลดรายการอาการไม่ได้: ${err.message}` } : prev));
+    }
+  };
+
+  const submitDefect = async () => {
+    const p = defectPopupRef.current;
+    const code = p?.codes.find((c) => c.id === p.defectId);
+    if (!p?.sn || !code) return;
+    setDefectPopup(null); // ปิดก่อน ให้ผลสแกนถัดไปกลับไปส่งปกติ — ผลแต่ละ station ดูในแถว station
+    const ok = await processScan(p.sn, p.source, { stationId: p.stationId, defectId: code.id, code: code.defect_code, description: code.description });
+    setMessage(
+      ok
+        ? { type: "ok", text: `ส่งงานเสีย ${p.sn} ที่ ${p.label} สำเร็จ (${code.defect_code} ${code.description})` }
+        : { type: "error", text: `ส่งงานเสีย ${p.sn} ไม่สำเร็จ — ดูรายละเอียดในแถว station` }
+    );
   };
 
   // เลือก WO ครั้งเดียว ใช้กับทุก station (เปลี่ยนได้เมื่อยังไม่ Lock)
@@ -1327,6 +1392,86 @@ export default function MesUpdate({ isDarkMode = false }) {
     );
   };
 
+  // ---------- render: popup งานเสีย ----------
+  const renderDefectPopup = () => {
+    const p = defectPopup;
+    if (!p) return null;
+    const lockedList = stations.filter((s) => locked.has(s.id));
+    const before = lockedList.slice(0, lockedList.findIndex((s) => s.id === p.stationId));
+    const canSend = Boolean(p.sn && p.defectId) && !sending;
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <div className={`w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-3xl border shadow-2xl p-5 space-y-4 ${card}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-2xl font-black text-rose-500">✖ ส่งงานเสีย — {p.label}</div>
+              <div className="text-xs text-gray-400 mt-1">
+                {before.length > 0
+                  ? `จะส่งผ่าน (PASS / INPUT) ที่ ${before.map((s) => s.label || s.station).join(" → ")} ก่อน แล้วส่ง FAIL ที่ ${p.label}`
+                  : `ส่ง FAIL ที่ ${p.label}`}
+                {" "}· WO {wo?.mo || "-"}
+              </div>
+            </div>
+            <button type="button" className={btnGhost} onClick={() => setDefectPopup(null)}>ปิด</button>
+          </div>
+
+          <div>
+            <label className={label}>1. สแกนงานเสีย (ใช้เครื่องสแกน หรือพิมพ์แล้วกด Enter)</label>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const v = e.currentTarget.elements.defectSn.value.replace(/[}\r\n]/g, "").trim();
+                if (v) setDefectPopup((prev) => (prev ? { ...prev, sn: v, source: "Scanner", error: null } : prev));
+                e.currentTarget.reset();
+              }}
+              className="flex gap-2"
+            >
+              <input name="defectSn" autoFocus autoComplete="off" placeholder="สแกน QR ที่นี่" className={`${input} flex-1 text-base`} />
+              <button type="submit" className={btnGhost}>ใช้ SN นี้</button>
+            </form>
+            <div className={`mt-2 px-4 py-3 rounded-2xl text-center font-mono font-black text-2xl break-all ${
+              p.sn ? "bg-rose-500/10 text-rose-500" : `${isDarkMode ? "bg-slate-900" : "bg-gray-50"} text-gray-400 text-base`
+            }`}>
+              {p.sn || "รอสแกน..."}
+            </div>
+          </div>
+
+          <div>
+            <label className={label}>2. เลือกอาการเสีย (Station {p.station})</label>
+            {p.loading ? (
+              <div className="text-sm text-gray-400">กำลังโหลด...</div>
+            ) : (
+              <select
+                className={`${input} w-full !text-lg !py-3 font-bold`}
+                value={p.defectId ?? ""}
+                disabled={p.codes.length === 0}
+                onChange={(e) => {
+                  const id = Number(e.target.value) || null;
+                  setDefectPopup((prev) => (prev ? { ...prev, defectId: id } : prev));
+                }}
+              >
+                <option value="">— เลือกอาการเสีย —</option>
+                {p.codes.map((c) => (
+                  <option key={c.id} value={c.id}>{c.defect_code} — {c.description}</option>
+                ))}
+              </select>
+            )}
+            {p.error && <div className="mt-2 text-sm font-bold text-rose-500">⚠ {p.error}</div>}
+          </div>
+
+          <button
+            type="button"
+            onClick={submitDefect}
+            disabled={!canSend}
+            className="w-full py-4 rounded-2xl text-xl font-black bg-rose-600 hover:bg-rose-700 text-white disabled:opacity-40"
+          >
+            {!p.sn ? "สแกนงานเสียก่อน" : !p.defectId ? "เลือกอาการเสียก่อน" : "ส่งงานเสีย"}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   // ---------- render: WO (เลือกครั้งเดียว) + Progress ----------
   const renderWoCard = () => {
     const mos = moByLine[woLine] || [];
@@ -1482,6 +1627,7 @@ export default function MesUpdate({ isDarkMode = false }) {
           <div className="px-16 py-8 rounded-3xl bg-emerald-600 text-white text-7xl font-black shadow-2xl">PASS</div>
         </div>
       )}
+      {renderDefectPopup()}
       {header}
       {messageBar}
 
@@ -1598,6 +1744,18 @@ export default function MesUpdate({ isDarkMode = false }) {
                     <div className="text-3xl font-black leading-tight tabular-nums">{shiftCount(st).ng}</div>
                   </div>
                 </div>
+
+                {/* ส่งงานเสียที่ station นี้ (station ที่ Lock ก่อนหน้าจะถูกส่งผ่านให้ก่อน) */}
+                {isLocked && (
+                  <button
+                    type="button"
+                    onClick={() => openDefect(st)}
+                    disabled={sending}
+                    className="px-5 py-2.5 self-stretch rounded-xl text-sm font-black shrink-0 bg-rose-600 hover:bg-rose-700 text-white disabled:opacity-40"
+                  >
+                    ✖ งานเสีย
+                  </button>
+                )}
 
                 <button
                   type="button"

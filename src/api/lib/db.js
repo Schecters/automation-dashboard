@@ -237,6 +237,42 @@ export const initDatabase = async () => {
       );
     `);
 
+    // 🧯 อาการงานเสีย (Defect Code) ของแต่ละ Station ของ MES + ประวัติการส่งงานเสียจากหน้า /MES (routes/defects.js)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS automation_lines.defect_codes (
+        id SERIAL PRIMARY KEY,
+        station_name VARCHAR(100) NOT NULL,
+        defect_code VARCHAR(50) NOT NULL,
+        description VARCHAR(200) NOT NULL,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by VARCHAR(30),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT unique_station_defect_code UNIQUE (station_name, defect_code)
+      );
+
+      CREATE TABLE IF NOT EXISTS automation_lines.defect_logs (
+        id SERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        terminal VARCHAR(100),
+        line VARCHAR(100),
+        section VARCHAR(100),
+        group_name VARCHAR(100),
+        station VARCHAR(100),
+        mo VARCHAR(50),
+        model VARCHAR(100),
+        sn VARCHAR(200),
+        defect_id INT,
+        defect_code VARCHAR(50),
+        description VARCHAR(200),
+        emp_no VARCHAR(30),
+        emp_name VARCHAR(100),
+        success BOOLEAN NOT NULL DEFAULT FALSE,
+        mes_response TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_defect_logs_created_at ON automation_lines.defect_logs (created_at DESC);
+    `);
+
     await pool.query(`
       ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email VARCHAR(255) DEFAULT NULL;
       ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS shift VARCHAR(10) DEFAULT NULL;

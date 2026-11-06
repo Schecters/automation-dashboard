@@ -20,6 +20,7 @@ import plcRoutes from './routes/plc.js';
 import operatorDataRoutes from './routes/operatorData.js';
 import pmChecklistRoutes from './routes/pmChecklist.js';
 import mesRoutes from './routes/mes.js';
+import defectsRoutes from './routes/defects.js';
 
 // ==========================================
 // 🧰 โหมดรวม: ทุก API อยู่ใน process เดียวที่ port 5000 (แบบเดิมก่อนแยก service)
@@ -46,6 +47,7 @@ const { server } = createServiceApp('all-in-one', [
   operatorDataRoutes,
   pmChecklistRoutes, // Daily PM Checklist
   mesRoutes, // MES Update
+  defectsRoutes, // Defect Code + ประวัติงานเสีย
 ]);
 
 initRealtime(server);

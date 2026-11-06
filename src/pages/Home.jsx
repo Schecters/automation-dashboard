@@ -21,6 +21,8 @@ const StepCustom = lazy(() => import("../components/plc/StepCustom"));
 const Api = lazy(() => import("../components/dashboard/ApiDocContent")); // 🟢 Api
 const DailyCheckList = lazy(() => import("../components/pm/DailyCheckList"));
 const PmChecklistBuilder = lazy(() => import("../components/pm/PmChecklistBuilder"));
+const DefectCodeContent = lazy(() => import("../components/defects/DefectCodeContent"));
+const DefectHistoryContent = lazy(() => import("../components/defects/DefectHistoryContent"));
 
 // 🟢 Common
 import NotificationBell from "../components/common/NotificationBell";
@@ -231,6 +233,29 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         ),
       },
       {
+        id: "defect_code",
+        label: "Defect Code",
+        category: "Production Control",
+        // ทุก role ดูได้ / แก้ไขได้เฉพาะ admin, me, q (เช็คใน API)
+        roles: ["admin", "me", "ie", "pd", "q", "view"],
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        ),
+      },
+      {
+        id: "defect_history",
+        label: "Defect History",
+        category: "Production Control",
+        roles: ["admin", "me", "ie", "pd", "q", "view"],
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l6-6m-6 0l6 6" />
+          </svg>
+        ),
+      },
+      {
         id: "layout",
         label: "Layout Editor",
         category: "Production Control",
@@ -415,6 +440,10 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         return <UserManagementContent isDarkMode={isDarkMode} />;
       case "audit":
         return <AuditLogContent isDarkMode={isDarkMode} />;
+      case "defect_code":
+        return <DefectCodeContent isDarkMode={isDarkMode} userRole={userRole} />;
+      case "defect_history":
+        return <DefectHistoryContent isDarkMode={isDarkMode} />;
       case "excel_search":
         return <ExcelSearchContent isDarkMode={isDarkMode} />;
       case "knowledge":

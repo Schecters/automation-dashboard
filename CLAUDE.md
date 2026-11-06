@@ -90,6 +90,7 @@ git push
 | `users/` | UserManagementContent, AuditLogContent | `users.js`, `auth.js` |
 | `mes/` | MesUpdate (+ `pages/MesLogin.jsx`) | `mes.js` + `lib/mesClient.js`, `lib/mesLog.js`, `lib/operatorExams.js` |
 | `dashboard/` | OverallContent (ภาพรวม ดึงหลายเรื่อง), ApiDocContent (คู่มือ API) | หลายไฟล์ |
+| `defects/` | DefectCodeContent (อาการงานเสีย), DefectHistoryContent (ประวัติงานเสีย) | `defects.js` |
 | `common/` | NotificationBell, DarkModeToggle | `notifications.js` |
 
 หน้าหลัก (`src/pages/Home.jsx`) เป็นตัวโหลดหน้าเหล่านี้ / `src/pages/Login.jsx` ใช้ `auth.js`
@@ -127,7 +128,7 @@ git push
   - หน้า `DailyCheckList.jsx` (กรอก/ประวัติ/อนุมัติ) และ `PmChecklistBuilder.jsx` (สร้างแม่แบบ: admin, me)
   - ผู้อนุมัติ: ตำแหน่ง Line (owner/leader/supervisor จาก `line_owners`) หรือ role (me/ie/q/pd/admin), Admin อนุมัติแทนได้ทุกขั้น
 - MES Update: เปิดที่ `https://10.204.206.1:5173/MES` เท่านั้น (ไม่มีเมนูใน dashboard) หน้า login `src/pages/MesLogin.jsx`,
-  หน้าใช้งาน `src/components/mes/MesUpdate.jsx`, API `src/api/routes/mes.js` — **ไม่ใช้ Database**
+  หน้าใช้งาน `src/components/mes/MesUpdate.jsx`, API `src/api/routes/mes.js` — **ไม่ใช้ Database เอง** (อาการ / ประวัติงานเสียอยู่ที่ service data เรียกผ่าน `internalFetch`)
   - operator login ด้วยรหัสพนักงาน ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดก็ได้ใน `auth.excel_configs`
     ฟังก์ชัน `findOperatorExams` ใน `src/api/lib/operatorExams.js`, เรียกตรงได้ที่ `/api/operator-exam-check?employee_id=`)
     ถ้าเครื่องนั้นตั้ง **เกณฑ์ความสามารถ** (`mesQualStations` = Line/Station จาก dashboard) operator ต้องผ่านข้อสอบบังคับ + คะแนนขั้นต่ำ
@@ -136,7 +137,7 @@ git push
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
     ดู Line / Station / WO (lineinfo, molist) ใช้รหัสกลาง `MES_QUERY_EMP_NO` (default 86727533) / routing-update ใช้รหัส operator ที่ login
     ส่งแต่ละ station: POST /api/mes/tdc/routing-check (ต้อง OK) แล้วค่อย POST /api/mes/tdc/typed/routing-update (testData "")
-    รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1` (`buildRoutingRow`) หน้าเว็บส่ง PASS อย่างเดียว (เอาปุ่ม FAIL ออกแล้ว — API ยังรับ FAIL ได้)
+    รูปแบบ routing-update: `SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1` (`buildRoutingRow`) สแกนปกติส่ง PASS / ส่ง FAIL ได้ทางปุ่ม "งานเสีย" เท่านั้น (ด้านล่าง)
   - รับ QR จาก Keyence: **PC หน้าไลน์ต่อเครื่องสแกนเอง** ผ่านโปรแกรม MES Bridge (`tools/mes-bridge/mes-bridge.cjs`,
     เปิดด้วย `start-mes-bridge.bat`, ต้องมี Node.js ไม่ต้องลง package) ฟังที่ `http://127.0.0.1:18080` หน้าเว็บเรียกตรง
     (เครื่องสแกนอยู่ network ของ PC นั้น เช่น 192.168.1.x server เข้าไม่ถึง / เบราว์เซอร์ต่อ TCP เองไม่ได้)
@@ -150,6 +151,13 @@ git push
   - ประวัติการส่ง: ไฟล์ CSV ที่ `MES_LOG_DIR` (default `D:\MES logs`) — `YYYY-MM-DD.csv` และ `login_YYYY-MM.csv` (`src/api/lib/mesLog.js`)
   - ยอด OK / NG ของกะปัจจุบัน (กะเช้า 07:40-19:40 / กะดึก 19:40-07:40) นับจากไฟล์ CSV เดียวกัน เฉพาะที่ส่งสำเร็จ
     (OK = PASS/INPUT, NG = FAIL) แสดงเป็นกล่องใหญ่ข้างปุ่ม Lock ของแต่ละ station: `GET /api/mes/shift-summary?terminal=` (`readShiftSummary`)
+  - **งานเสีย**: ปุ่ม "✖ งานเสีย" ในแถว station ที่ Lock → popup สแกน SN (ผลสแกนจาก Modbus/TCP/ช่องพิมพ์เข้า popup แทนการส่งปกติ `routeScan`)
+    + dropdown อาการ (`GET /api/mes/defect-codes?station=`) → ส่ง station ที่ Lock ก่อนหน้าให้ผ่าน (PASS / INPUT) ก่อน แล้วส่ง FAIL ที่ station นั้นแล้วหยุด
+    (station ก่อนหน้าไม่ผ่าน = ไม่ส่ง FAIL / station แบบ input ที่เป็นจุดเสีย ส่ง FAIL แบบ routing เหมือน station อื่น)
+    `update-route` รับ `defect_id` → testData `[SN/FAIL];[รหัสอาการ/อาการ];[รหัสพนักงาน]` (`buildDefectTestData`) + บันทึก `defect_logs`
+  - **Defect Code / Defect History** (แท็บใน Home): `src/api/routes/defects.js` อยู่ใน service data (5000) ตาราง `automation_lines.defect_codes`
+    (station_name = ชื่อ Station ของ MES, defect_code, description, is_active) และ `automation_lines.defect_logs` / แก้อาการได้: admin, me, q
+    service อื่นเรียก `/internal/defect-codes`, `/internal/defect-logs` ด้วย `internalFetch` (`lib/internalKey.js` — เฉพาะ 127.0.0.1 + key จาก JWT_SECRET)
   - **WO เลือกครั้งเดียว ใช้ทุก station** (กล่องบนสุดของหน้า, เก็บใน `mesWo` = `{ line, mo, model }`) เปลี่ยนได้เมื่อปลด Lock ทุก station
     ทุก station ส่ง WO เดียวกัน — server เช็คว่า WO อยู่ใน Line ของ station นั้น (station ต่าง Line กัน = ส่งไม่ผ่าน)
     + Progress bar Output / Target จาก WMS (`GET /api/mes/wo-progress?mo=` โหลดใหม่ทุก 30 วินาที, ต้องตั้ง `WMS_API_USER` / `WMS_API_PASSWORD`)

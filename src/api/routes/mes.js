@@ -3,7 +3,8 @@ import jwt from 'jsonwebtoken';
 import { io } from '../lib/realtime.js';
 import { JWT_SECRET, MES_QUERY_EMP_NO } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
-import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
+import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, buildDefectTestData, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
+import { internalFetch, InternalServiceError } from '../lib/internalKey.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs, readShiftSummary } from '../lib/mesLog.js';
 import { findOperatorExams, checkOperatorQualification } from '../lib/operatorExams.js';
 import { getWorkOrderProgress, WmsError } from '../lib/wmsClient.js';
@@ -12,7 +13,9 @@ import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '.
 const router = express.Router();
 
 // ==========================================
-// 🏭 MES Update (หน้า /MES) — ไม่ใช้ Database
+// 🏭 MES Update (หน้า /MES) — ไม่ใช้ Database เอง
+//  (อาการงานเสีย / ประวัติงานเสีย อยู่ใน DB ของ service data — เรียกผ่าน internalFetch('data', '/internal/...')
+//   data ปิด = ส่งงานเสียไม่ได้ แต่ส่ง PASS / INPUT ปกติยังได้)
 //  - operator login ด้วยรหัสพนักงาน ต้องเคยทำข้อสอบ (Excel) token หมดอายุ 07:40 / 19:40
 //  - การตั้งค่าของแต่ละเครื่อง (ชื่อเครื่อง / Modbus / station) เก็บในเบราว์เซอร์ของเครื่องนั้น
 //  - API นี้: ดึง Line/Station/WO จาก MES, ยิง routing-update (อ่านเครื่องสแกนทำที่ MES Bridge บน PC หน้าไลน์)
@@ -219,7 +222,11 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
   const stationName = text(req.body?.station, 100);
   const mo = text(req.body?.mo, 50);
   const terminal = text(req.body?.terminal, 100) || '';
+  const defectId = Number(req.body?.defect_id) || null; // งานเสีย: id ของอาการใน Defect Code
   if (!sn) return res.status(400).json({ success: false, message: 'ไม่มี Serial Number' });
+  if (defectId && (mode !== 'routing' || result !== 'FAIL')) {
+    return res.status(400).json({ success: false, message: 'อาการงานเสียใช้กับการส่ง FAIL เท่านั้น' });
+  }
   if (mode === 'routing' && !ROUTING_RESULTS.includes(result)) return res.status(400).json({ success: false, message: 'ผลต้องเป็น PASS หรือ FAIL' });
   if (!line || !stationName) return res.status(400).json({ success: false, message: 'ไม่มี Line / Station' });
   if (!mo) return res.status(400).json({ success: false, message: 'กรุณาเลือก WO ของ station นี้ก่อน' });
@@ -257,6 +264,21 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
         : null;
     const row = inputPayload ? JSON.stringify(inputPayload) : buildRoutingRow({ ...fields, result });
 
+    // งานเสีย: อ่านอาการจาก Defect Code (ต้องเป็นของ Station นี้และยังเปิดใช้งาน)
+    let defect = null;
+    let testData = '';
+    if (defectId) {
+      const { status, body } = await internalFetch('data', `/internal/defect-codes?id=${defectId}`);
+      if (status !== 200 || !body.success) {
+        return res.status(503).json({ success: false, message: `อ่านรายการอาการเสียไม่ได้ (${body.message || `HTTP ${status}`})` });
+      }
+      defect = body.data;
+      if (!defect || !defect.is_active || defect.station_name !== st.STATION_NAME) {
+        return res.status(400).json({ success: false, message: `อาการนี้ไม่ใช่ของ Station ${st.STATION_NAME} หรือถูกปิดใช้งานแล้ว` });
+      }
+      testData = buildDefectTestData({ sn, defectCode: defect.defect_code, description: defect.description, empNo });
+    }
+
     let success = false;
     let responseText = '';
     let message = '';
@@ -276,10 +298,10 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
           message = `Routing ไม่ผ่าน: ${check.description || check.result || 'MES ไม่ตอบ OK'}`;
         } else {
           // 2) routing-update
-          const mesRes = await routingUpdate([row]);
+          const mesRes = await routingUpdate([row], testData);
           success = true;
           responseText = `CHECK OK; UPDATE: ${mesRes.text}`;
-          message = `ส่ง ${result} สำเร็จ`;
+          message = defect ? `ส่งงานเสียสำเร็จ (${defect.defect_code} ${defect.description})` : `ส่ง ${result} สำเร็จ`;
           lastSent.set(key, { sn, result });
         }
       }
@@ -301,9 +323,26 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
       sn,
       result,
       success,
-      mes_response: `${row} => ${responseText}`.slice(0, 2000),
+      mes_response: `${row}${testData ? ` | testData ${testData}` : ''} => ${responseText}`.slice(0, 2000),
     });
     io.emit('mes_updated', { terminal, success });
+
+    // ประวัติงานเสียลง Database (ผ่าน service data) — บันทึกไม่ได้ไม่ทำให้การส่ง MES ล้ม
+    if (defect) {
+      internalFetch('data', '/internal/defect-logs', {
+        method: 'POST',
+        body: {
+          terminal, line, section: st.SECTION_NAME, group: st.GROUP_NAME, station: st.STATION_NAME,
+          mo, model: moRow.MODEL_NAME, sn, defect_id: defect.id, defect_code: defect.defect_code,
+          description: defect.description, emp_no: empNo, emp_name: req.mesOperator.name, success,
+          mes_response: `${testData} => ${responseText}`,
+        },
+      })
+        .then(({ status, body }) => {
+          if (status !== 200 || !body.success) console.warn('⚠️ บันทึกประวัติงานเสียไม่ได้:', body.message || status);
+        })
+        .catch((err) => console.warn('⚠️ บันทึกประวัติงานเสียไม่ได้:', err.message));
+    }
 
     res.status(success ? 200 : 502).json({
       success,
@@ -312,7 +351,23 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
       mes_response: responseText,
     });
   } catch (err) {
+    if (err instanceof InternalServiceError) return res.status(err.status).json({ success: false, message: err.message });
     sendMesError(res, err, 'Update route ไม่สำเร็จ');
+  }
+});
+
+// อาการงานเสียของ Station นี้ (จาก Defect Code ใน dashboard) ให้ popup งานเสียหน้า /MES
+router.get('/api/mes/defect-codes', authenticateMesOrStaff, async (req, res) => {
+  const station = text(req.query.station, 100);
+  if (!station) return res.status(400).json({ success: false, message: 'ไม่มี Station' });
+  try {
+    const { status, body } = await internalFetch('data', `/internal/defect-codes?station=${encodeURIComponent(station)}`);
+    if (status !== 200 || !body.success) {
+      return res.status(503).json({ success: false, message: `โหลดรายการอาการเสียไม่ได้ (${body.message || `HTTP ${status}`})` });
+    }
+    res.json({ success: true, data: body.data.map(({ id, defect_code, description }) => ({ id, defect_code, description })) });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 });
 
