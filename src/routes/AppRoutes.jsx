@@ -11,8 +11,6 @@ import Home from '../pages/Home';
 
 // หน้า MES Update แบบเต็มจอ (kiosk หน้าไลน์) มี login operator ของตัวเอง
 const MesUpdate = lazy(() => import('../components/mes/MesUpdate'));
-// หน้าทดสอบ UI ของ MES (ไม่ส่ง MES จริง) — เลือก WO ครั้งเดียว + Progress WO จาก WMS
-const NoMesUpdate = lazy(() => import('../components/mes/NoMesUpdate'));
 
 export default function AppRoutes() {
   const navigate = useNavigate();
@@ -128,15 +126,6 @@ export default function AppRoutes() {
         element={
           <Suspense fallback={null}>
             <MesUpdate isDarkMode={isDarkMode} />
-          </Suspense>
-        }
-      />
-
-      <Route
-        path="/NOMES"
-        element={
-          <Suspense fallback={null}>
-            <NoMesUpdate isDarkMode={isDarkMode} />
           </Suspense>
         }
       />

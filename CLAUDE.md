@@ -150,12 +150,10 @@ git push
   - ประวัติการส่ง: ไฟล์ CSV ที่ `MES_LOG_DIR` (default `D:\MES logs`) — `YYYY-MM-DD.csv` และ `login_YYYY-MM.csv` (`src/api/lib/mesLog.js`)
   - ยอด OK / NG ของกะปัจจุบัน (กะเช้า 07:40-19:40 / กะดึก 19:40-07:40) นับจากไฟล์ CSV เดียวกัน เฉพาะที่ส่งสำเร็จ
     (OK = PASS/INPUT, NG = FAIL) แสดงเป็นกล่องใหญ่ข้างปุ่ม Lock ของแต่ละ station: `GET /api/mes/shift-summary?terminal=` (`readShiftSummary`)
+  - **WO เลือกครั้งเดียว ใช้ทุก station** (กล่องบนสุดของหน้า, เก็บใน `mesWo` = `{ line, mo, model }`) เปลี่ยนได้เมื่อปลด Lock ทุก station
+    ทุก station ส่ง WO เดียวกัน — server เช็คว่า WO อยู่ใน Line ของ station นั้น (station ต่าง Line กัน = ส่งไม่ผ่าน)
+    + Progress bar Output / Target จาก WMS (`GET /api/mes/wo-progress?mo=` โหลดใหม่ทุก 30 วินาที, ต้องตั้ง `WMS_API_USER` / `WMS_API_PASSWORD`)
   - ตาราง `automation_lines.mes_*` ที่เคยสร้างไว้รุ่นก่อน เลิกใช้แล้ว (ลบได้)
-- **NoMES** (`https://10.204.206.1:5173/NOMES`) หน้าทดสอบ UI ก๊อปจาก MES Update: `src/components/mes/NoMesUpdate.jsx`
-  - **ไม่ส่ง MES จริง** — สแกนแล้วจำลองผลสำเร็จ (ไม่เรียก `/api/mes/update-route`, ไม่เขียน CSV) ประวัติ / ยอด OK-NG อยู่ในหน้าเท่านั้น
-  - เลือก WO ครั้งเดียวใช้ทุก station (`nomesWo`) + Progress Output/Target จาก WMS (`GET /api/mes/wo-progress?mo=` ทุก 30 วินาที)
-  - ตั้งค่าเก็บแยก key `nomes*` (ครั้งแรกก๊อปค่าจาก `mes*` ของเครื่องนั้น) ไม่กระทบหน้า /MES / login operator ใช้ระบบเดียวกับ /MES
-  - ถ้าทดสอบ UI แล้วโอเค ค่อยย้ายส่วนที่ต้องการไป `MesUpdate.jsx`
 - **WMS** (ข้อมูล WO): `src/api/lib/wmsClient.js` login ที่ `WMS_AUTH_BASE` (default `http://10.204.212.28:15000/auth/login`)
   ด้วย `WMS_API_USER` / `WMS_API_PASSWORD` ใน `.env` แล้วเรียก `WMS_API_BASE` (default `http://10.204.212.28:5207`) เช่น `/workorder/<WO>/detail`
   - token จำในหน่วยความจำ ใกล้หมด (< 2 นาที) หรือได้ 401 → login ใหม่อัตโนมัติ (`wmsGet`) / ไม่ตั้งบัญชี = ตอบ 503

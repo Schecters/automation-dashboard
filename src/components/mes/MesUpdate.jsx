@@ -3,7 +3,8 @@ import { socket, deviceId } from "../../socket";
 import MesLogin from "../../pages/MesLogin";
 
 // 🏭 MES Update (เปิดที่ https://<server>:5173/MES)
-//  - operator login ด้วยรหัสพนักงาน → เลือก WO ของแต่ละ station → Lock station ที่จะใช้
+//  - operator login ด้วยรหัสพนักงาน → เลือก WO ครั้งเดียว (ใช้กับทุก station) → Lock station ที่จะใช้
+//  - แสดง Progress ของ WO (Output / Target) จาก WMS ผ่าน /api/mes/wo-progress (โหลดใหม่ทุก 30 วินาที)
 //  - เครื่องนี้ต่อ Modbus TCP กับเครื่องสแกน Keyence "ครั้งเดียว" (ตั้งค่าต่อเครื่อง)
 //  - สแกน QR 1 ครั้ง → ส่ง routing-update ไปทุก station ที่ Lock ตามลำดับ บนลงล่าง (station 1 → 2 → ...)
 //  - สแกนด้วย scanner ที่ต่อเครื่อง (พิมพ์ลงช่อง + Enter) ได้ด้วย
@@ -17,6 +18,8 @@ const MES_STATIONS_KEY = "mesStations"; // station ของเครื่อ�
 const MES_MODBUS_KEY = "mesModbus"; // การเชื่อมต่อเครื่องสแกน (null = ไม่ใช้ Modbus)
 // เกณฑ์ความสามารถ operator ของเครื่องนี้ [{ line, station }] จาก Lines & Stations ของ dashboard (ว่าง = เช็คแค่เคยทำข้อสอบ)
 const MES_QUAL_KEY = "mesQualStations";
+const MES_WO_KEY = "mesWo"; // WO ที่เลือก { line, mo, model } ใช้กับทุก station
+const WO_PROGRESS_POLL_MS = 30000;
 const qualKey = (q) => `${q.line}|${q.station}`;
 // การส่งหลาย station ของเครื่องนี้: delay_sec = รอกี่วินาทีก่อนส่ง station ถัดไป,
 // continue_on_error = station ไหนส่งไม่สำเร็จ ก็ส่ง station ถัดไปต่อ
@@ -150,6 +153,15 @@ export default function MesUpdate({ isDarkMode = false }) {
   const [logs, setLogs] = useState([]);
   // ยอดส่งสำเร็จของเครื่องนี้ในกะปัจจุบัน { shift, start, end, total: { ok, ng }, stations: [{ line, station, ok, ng }] }
   const [shiftSummary, setShiftSummary] = useState(null);
+  // WO เดียวใช้กับทุก station { line, mo, model } — ครั้งแรกใช้ WO ที่เคยเลือกไว้ใน station (รุ่นก่อนเลือกแยกต่อ station)
+  const [wo, setWoState] = useState(() => {
+    const saved = loadJson(MES_WO_KEY, null);
+    if (saved?.mo) return saved;
+    const old = loadJson(MES_STATIONS_KEY, []).find((s) => s.mo);
+    return old ? { line: old.line, mo: String(old.mo), model: old.model_name || "" } : null;
+  });
+  const [woLine, setWoLine] = useState(() => wo?.line || "");
+  const [woProgress, setWoProgress] = useState(null); // { data, error, loading, at }
   const [locked, setLocked] = useState(() => new Set(loadJson(MES_LOCKED_KEY, [])));
   const [runtime, setRuntime] = useState({}); // stationId -> { sn, result, status, text }
   // station ที่กด FAIL ไว้: ชิ้นถัดไปส่ง PASS ให้ station ก่อนหน้า แล้วส่ง FAIL ที่ station นี้ และหยุด
@@ -191,6 +203,7 @@ export default function MesUpdate({ isDarkMode = false }) {
   const terminalRef = useRef(terminal);
   const modbusCfgRef = useRef(modbusCfg);
   const sendOptionsRef = useRef(sendOptions);
+  const woRef = useRef(wo);
 
   // ให้ loop อ่านสแกน / callback เห็นค่าล่าสุด (effect นี้ประกาศก่อน effect อื่น จึงรันก่อน)
   useEffect(() => {
@@ -201,7 +214,8 @@ export default function MesUpdate({ isDarkMode = false }) {
     terminalRef.current = terminal;
     modbusCfgRef.current = modbusCfg;
     sendOptionsRef.current = sendOptions;
-  }, [stations, locked, failArmed, mesAuth, terminal, modbusCfg, sendOptions]);
+    woRef.current = wo;
+  }, [stations, locked, failArmed, mesAuth, terminal, modbusCfg, sendOptions, wo]);
 
   const operatorHeaders = useCallback(
     () => ({ "Content-Type": "application/json", Authorization: `Bearer ${mesAuthRef.current?.token || ""}` }),
@@ -311,13 +325,52 @@ export default function MesUpdate({ isDarkMode = false }) {
     shiftSummary?.stations?.find((s) => s.line === st.line && s.station === st.station) || { ok: 0, ng: 0 };
 
   // โหลด WO ของทุก Line ที่มี station
-  const stationLines = useMemo(() => [...new Set(stations.map((s) => s.line))], [stations]);
+  const stationLines = useMemo(() => [...new Set(stations.map((s) => s.line).filter(Boolean))], [stations]);
   useEffect(() => {
     if (!canRead) return;
     stationLines.forEach((line) => {
       if (!moByLine[line]) fetchMoList(line);
     });
   }, [canRead, stationLines, moByLine, fetchMoList]);
+
+  // Line ที่ใช้เลือก WO: ถ้าเครื่องนี้มี Line เดียว เลือกให้เลย
+  useEffect(() => {
+    if (!woLine && stationLines.length > 0) setWoLine(stationLines[0]);
+  }, [woLine, stationLines]);
+
+  // ---------- WO (เลือกครั้งเดียว ใช้ทุก station) + Progress จาก WMS ----------
+  const setWo = (next) => {
+    saveJson(MES_WO_KEY, next);
+    setWoState(next);
+    setWoProgress(null);
+  };
+
+  const fetchWoProgress = useCallback(
+    async (mo) => {
+      if (!mo) return;
+      setWoProgress((prev) => ({ ...(prev?.data?.mo === mo ? prev : {}), loading: true }));
+      try {
+        const res = await fetch(`${API_URL}/mes/wo-progress?mo=${encodeURIComponent(mo)}`, { headers: readHeaders() });
+        if (mesAuthRef.current && (await handleOperator401(res))) return;
+        const data = await res.json().catch(() => ({}));
+        if (woRef.current?.mo !== mo) return; // เปลี่ยน WO ไปแล้วระหว่างโหลด
+        if (data.success) setWoProgress({ data: data.data, error: null, loading: false, at: new Date().toISOString() });
+        else setWoProgress((prev) => ({ ...prev, error: data.message || `โหลด Progress ไม่ได้ (HTTP ${res.status})`, loading: false }));
+      } catch (err) {
+        setWoProgress((prev) => ({ ...prev, error: `โหลด Progress ไม่ได้: ${err.message}`, loading: false }));
+      }
+    },
+    [readHeaders, handleOperator401]
+  );
+
+  // โหลด Progress ทันทีที่เลือก WO แล้วโหลดใหม่ทุก 30 วินาที
+  const woMo = wo?.mo || "";
+  useEffect(() => {
+    if (!canRead || !woMo) return;
+    fetchWoProgress(woMo);
+    const timer = setInterval(() => fetchWoProgress(woMo), WO_PROGRESS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [canRead, woMo, fetchWoProgress]);
 
   useEffect(() => {
     // server แจ้งทุกเครื่อง -> โหลด log ใหม่เฉพาะเครื่องที่เป็นคนส่ง (log ของเครื่องอื่นไม่ได้แสดงที่นี่อยู่แล้ว)
@@ -351,6 +404,11 @@ export default function MesUpdate({ isDarkMode = false }) {
       const targets = stationsRef.current.filter((s) => lockedRef.current.has(s.id));
       if (targets.length === 0) {
         setMessage({ type: "error", text: "ยังไม่ได้ Lock station ใด — กด Lock station ที่จะส่งก่อน" });
+        return false;
+      }
+      const currentWo = woRef.current;
+      if (!currentWo?.mo) {
+        setMessage({ type: "error", text: "ยังไม่ได้เลือก WO — เลือก WO ด้านบนก่อน" });
         return false;
       }
       sendingRef.current = true;
@@ -394,7 +452,7 @@ export default function MesUpdate({ isDarkMode = false }) {
                 line: st.line,
                 station: st.station,
                 group: st.group_name,
-                mo: st.mo,
+                mo: currentWo.mo, // WO เดียวกันทุก station
               }),
             });
             if (await handleOperator401(upd)) return false;
@@ -547,8 +605,8 @@ export default function MesUpdate({ isDarkMode = false }) {
   };
 
   const toggleLock = (st) => {
-    if (!locked.has(st.id) && !st.mo) {
-      setMessage({ type: "error", text: `กรุณาเลือก WO ของ ${st.label || st.station} ก่อน Lock` });
+    if (!locked.has(st.id) && !wo?.mo) {
+      setMessage({ type: "error", text: "กรุณาเลือก WO ด้านบนก่อน Lock" });
       return;
     }
     if (locked.has(st.id)) {
@@ -567,11 +625,11 @@ export default function MesUpdate({ isDarkMode = false }) {
     });
   };
 
-  const changeMo = (st, mo) => {
-    const found = (moByLine[st.line] || []).find((m) => String(m.mo) === mo);
-    setStations((prev) =>
-      prev.map((s) => (s.id === st.id ? { ...s, mo: mo || null, model_name: found?.model || null } : s))
-    );
+  // เลือก WO ครั้งเดียว ใช้กับทุก station (เปลี่ยนได้เมื่อยังไม่ Lock)
+  const changeWo = (mo) => {
+    if (!mo) return setWo(null);
+    const found = (moByLine[woLine] || []).find((m) => String(m.mo) === mo);
+    setWo({ line: woLine, mo, model: found?.model || "" });
   };
 
   // ---------- staff (ME/admin) ----------
@@ -1269,6 +1327,100 @@ export default function MesUpdate({ isDarkMode = false }) {
     );
   };
 
+  // ---------- render: WO (เลือกครั้งเดียว) + Progress ----------
+  const renderWoCard = () => {
+    const mos = moByLine[woLine] || [];
+    const p = wo?.mo && woProgress?.data?.mo === wo.mo ? woProgress.data : null;
+    const pct = p && p.target_qty > 0 ? Math.min(100, (p.output_qty / p.target_qty) * 100) : 0;
+    const fmt = (n) => Number(n || 0).toLocaleString("en-US");
+    const fmtDate = (v) =>
+      v ? new Date(v).toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short" }) : "-";
+    const stat = (labelText, value, cls) => (
+      <div className={`px-3 py-2 rounded-xl ${isDarkMode ? "bg-slate-900" : "bg-gray-50"}`}>
+        <div className="text-[10px] font-bold text-gray-400">{labelText}</div>
+        <div className={`text-lg font-black tabular-nums ${cls || textMain}`}>{value}</div>
+      </div>
+    );
+
+    return (
+      <div className={`rounded-2xl border p-4 space-y-3 ${card}`}>
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="mr-auto">
+            <div className={`text-sm font-bold ${textMain}`}>Work Order — ใช้กับทุก station</div>
+            <div className="text-[11px] text-gray-400">
+              {hasLocked ? "ปลด Lock ทุก station ก่อน ถึงจะเปลี่ยน WO ได้" : "เลือกครั้งเดียว ทุก step ส่ง WO นี้"}
+            </div>
+          </div>
+          {stationLines.length > 1 && (
+            <div>
+              <label className={label}>Line</label>
+              <select className={`${input} w-32`} value={woLine} disabled={hasLocked}
+                onChange={(e) => setWoLine(e.target.value)}>
+                {stationLines.map((l) => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="flex items-end gap-2">
+            <div>
+              <label className={label}>WO {stationLines.length === 1 ? `(${woLine})` : ""}</label>
+              <select className={`${input} w-80 max-w-full`} value={wo?.mo || ""} disabled={hasLocked || !woLine}
+                onChange={(e) => changeWo(e.target.value)}>
+                <option value="">— เลือก WO —</option>
+                {wo?.mo && !mos.some((m) => String(m.mo) === wo.mo) && (
+                  <option value={wo.mo}>{wo.mo} {wo.model ? `— ${wo.model}` : ""}</option>
+                )}
+                {mos.map((m) => (
+                  <option key={m.mo} value={m.mo}>{m.mo} — {m.model}</option>
+                ))}
+              </select>
+            </div>
+            <button type="button" title="โหลดรายการ WO ใหม่" className={btnGhost} disabled={hasLocked || !woLine}
+              onClick={() => fetchMoList(woLine)}>↻</button>
+          </div>
+        </div>
+
+        {wo?.mo && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <div className="text-xs text-gray-400">
+                Progress (Output / Target) จาก WMS
+                {p && <> · <span className={`font-bold ${textMain}`}>{p.model}</span> · {p.line} · กำหนดเสร็จ {fmtDate(p.target_date)}</>}
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                {woProgress?.loading ? "กำลังโหลด..." : woProgress?.at ? `อัปเดต ${formatTime(woProgress.at)}` : ""}
+                <button type="button" className={btnGhost} onClick={() => fetchWoProgress(wo.mo)} disabled={woProgress?.loading}>↻</button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className={`flex-1 h-6 rounded-full overflow-hidden ${isDarkMode ? "bg-slate-800" : "bg-gray-200"}`}>
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${pct >= 100 ? "bg-emerald-500" : "bg-blue-600"}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <div className={`w-20 text-right text-2xl font-black tabular-nums ${pct >= 100 ? "text-emerald-500" : textMain}`}>
+                {p ? `${pct.toFixed(pct > 0 && pct < 10 ? 1 : 0)}%` : "-"}
+              </div>
+            </div>
+
+            {woProgress?.error && (
+              <div className="text-[11px] font-bold text-rose-500">⚠ {woProgress.error}</div>
+            )}
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {stat("Output", p ? fmt(p.output_qty) : "-", "text-blue-500")}
+              {stat("Target", p ? fmt(p.target_qty) : "-")}
+              {stat("คงเหลือ", p ? fmt(Math.max(0, p.target_qty - p.output_qty)) : "-")}
+              {stat("Input", p ? fmt(p.input_qty) : "-")}
+              {stat("Fail / Scrap", p ? `${fmt(p.fail_qty)} / ${fmt(p.scrap_qty)}` : "-", "text-rose-500")}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // ---------- render ----------
   const wrapper = `min-h-screen p-4 sm:p-6 space-y-5 ${isDarkMode ? "bg-[#0F172A]" : "bg-[#F4F6F8]"}`;
 
@@ -1277,7 +1429,7 @@ export default function MesUpdate({ isDarkMode = false }) {
       <div>
         <h2 className={`text-2xl font-bold ${isDarkMode ? "text-white" : "text-gray-900"}`}>MES Update</h2>
         <p className={`text-xs mt-1 ${isDarkMode ? "text-slate-400" : "text-gray-500"}`}>
-          สแกน QR 1 ครั้ง → ส่ง update route ไปทุก station ที่ Lock ตามลำดับบนลงล่าง
+          เลือก WO ครั้งเดียว → สแกน QR 1 ครั้ง → ส่ง update route ไปทุก station ที่ Lock ตามลำดับบนลงล่าง (WO เดียวกันทุก station)
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -1332,6 +1484,9 @@ export default function MesUpdate({ isDarkMode = false }) {
       )}
       {header}
       {messageBar}
+
+      {/* WO เลือกครั้งเดียว + Progress (อยู่บนสุด เลือกก่อนสแกน) */}
+      {renderWoCard()}
 
       {/* QR ที่อ่านได้ล่าสุด + ช่องสแกนด้วย scanner */}
       <div className={`rounded-2xl border p-4 space-y-3 ${card}`}>
@@ -1391,7 +1546,6 @@ export default function MesUpdate({ isDarkMode = false }) {
           {stations.map((st, i) => {
             const isLocked = locked.has(st.id);
             const rt = runtime[st.id];
-            const mos = moByLine[st.line] || [];
             return (
               <div
                 key={st.id}
@@ -1412,23 +1566,12 @@ export default function MesUpdate({ isDarkMode = false }) {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 lg:w-80">
-                  <select
-                    className={`${input} flex-1 min-w-0`}
-                    value={st.mo || ""}
-                    disabled={isLocked}
-                    onChange={(e) => changeMo(st, e.target.value)}
-                  >
-                    <option value="">— เลือก WO —</option>
-                    {st.mo && !mos.some((m) => String(m.mo) === st.mo) && (
-                      <option value={st.mo}>{st.mo} {st.model_name ? `— ${st.model_name}` : ""}</option>
-                    )}
-                    {mos.map((m) => (
-                      <option key={m.mo} value={m.mo}>{m.mo} — {m.model}</option>
-                    ))}
-                  </select>
-                  <button type="button" title="โหลด WO ใหม่" className={btnGhost} disabled={isLocked}
-                    onClick={() => fetchMoList(st.line)}>↻</button>
+                {/* WO มาจากกล่องด้านบน (เลือกครั้งเดียวใช้ทุก station) */}
+                <div className="lg:w-56 text-xs">
+                  <span className="text-gray-400">WO </span>
+                  {wo?.mo
+                    ? <span className={`font-mono font-bold ${textMain}`}>{wo.mo}</span>
+                    : <span className="text-rose-500 font-bold">ยังไม่เลือก</span>}
                 </div>
 
                 <div className="flex-1 min-w-0">
