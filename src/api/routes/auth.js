@@ -3,7 +3,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { SALT_ROUNDS, JWT_SECRET } from '../lib/config.js';
 import { pool } from '../lib/db.js';
-import { io, deviceSessions, broadcastOnlineUsers, kickOtherSessions } from '../lib/realtime.js';
+import { kickOtherSessions, logoutDevice } from '../lib/realtime.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { recordAuditLog } from '../lib/audit.js';
 import { authenticateToken, isRequestFromAdmin } from '../middleware/auth.js';
@@ -313,12 +313,8 @@ router.post('/api/logout', authenticateToken, async (req, res) => {
       [employeeId]
     );
 
-    // ตัดการเชื่อมต่อเฉพาะอุปกรณ์ที่เป็นของผู้ใช้คนนี้เท่านั้น
-    const session = deviceId ? deviceSessions.get(deviceId) : null;
-    if (session && String(session.employeeId) === String(employeeId)) {
-      io.to(session.socketId).disconnectSockets(true);
-      deviceSessions.delete(deviceId);
-    }
+    // ตัดการเชื่อมต่อเฉพาะอุปกรณ์ที่เป็นของผู้ใช้คนนี้เท่านั้น (ทำที่ service realtime + อัปเดตรายชื่อออนไลน์)
+    logoutDevice(employeeId, deviceId);
 
     await recordAuditLog({
       employeeId: employeeId,
@@ -331,7 +327,6 @@ router.post('/api/logout', authenticateToken, async (req, res) => {
       ipAddress: getClientIp(req)
     });
 
-    broadcastOnlineUsers();
     res.json({ success: true, message: 'Logged out successfully' });
   } catch (err) {
     console.error('Logout Error:', err);

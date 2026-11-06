@@ -1,5 +1,5 @@
 import { pool } from './db.js';
-import { PORT } from './config.js';
+import { serviceUrl } from './serviceMap.js';
 
 // ==========================================
 // 🔎 เช็คว่าพนักงานเคยทำข้อสอบ (มีชื่อในไฟล์ Excel คะแนนสอบไฟล์ใดไฟล์หนึ่ง) — ไม่ต้องระบุ Line / Station
@@ -18,7 +18,7 @@ const fetchExcelScores = async (configKey) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), EXCEL_FETCH_TIMEOUT_MS);
   try {
-    const url = `http://127.0.0.1:${PORT}/publics/excel-scores?configKey=${encodeURIComponent(configKey)}&t=${Date.now()}`;
+    const url = `${serviceUrl('graph')}/publics/excel-scores?configKey=${encodeURIComponent(configKey)}&t=${Date.now()}`;
     const res = await fetch(url, { signal: controller.signal });
     const json = await res.json().catch(() => ({}));
     // excel-scores ตอบ 200 + data [] + message เมื่อเปิดตารางไม่ได้ -> นับเป็นอ่านไม่สำเร็จ

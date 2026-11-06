@@ -10,6 +10,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "start:web": "vite build && vite preview",
+    "api:all": "concurrently -n data,realtime,auth,graph,mes,work -c blue,magenta,green,yellow,cyan,white \"node src/api/services/data.js\" \"node src/api/services/realtime.js\" \"node src/api/services/auth.js\" \"node src/api/services/graph.js\" \"node src/api/services/mes.js\" \"node src/api/services/work.js\"",
+    "api:single": "node src/api/server.js",
     "start:launcher": "electron launcher-main.cjs",
     "build:launcher": "electron-builder --win portable --x64"
   },

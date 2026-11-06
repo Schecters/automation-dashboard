@@ -1,11 +1,7 @@
-import http from 'http';
-import cors from 'cors';
-import express from 'express';
-import multer from 'multer';
-import { PORT } from './lib/config.js';
-import { UPLOAD_TYPE_ERROR } from './lib/uploads.js';
+import { createServiceApp } from './lib/service.js';
+import { SINGLE_MODE_PORT } from './lib/serviceMap.js';
 import { initDatabase } from './lib/db.js';
-import { initRealtime } from './lib/realtime.js';
+import { initRealtime, internalEmitRouter } from './lib/realtime.js';
 import { startPdCallMeEscalation } from './jobs/pdCallMeEscalation.js';
 
 import staticFilesRoutes from './routes/staticFiles.js';
@@ -25,91 +21,37 @@ import operatorDataRoutes from './routes/operatorData.js';
 import pmChecklistRoutes from './routes/pmChecklist.js';
 import mesRoutes from './routes/mes.js';
 
-const app = express();
-
-// 🟢 บอกให้ Express เชื่อถือ Header ที่ส่งต่อมาจาก Proxy / Vite
-app.set('trust proxy', true);
-
-// 🌐 Static files (ต้องลงทะเบียนก่อน CORS เหมือนเดิม)
-app.use(staticFilesRoutes);
-
 // ==========================================
-// 🛡️ Middleware: CORS & Body Parsers
+// 🧰 โหมดรวม: ทุก API อยู่ใน process เดียวที่ port 5000 (แบบเดิมก่อนแยก service)
+//  ใช้ตอนฉุกเฉิน / ทดสอบ: node .\src\api\server.js  (ห้ามรันพร้อม service แยกใน launcher — port ชนกัน)
+//  ปกติให้ใช้ launcher ที่รันแต่ละส่วนแยกกัน (ดู services.json, src/api/services/)
 // ==========================================
-app.use(cors({
-  origin: true,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'x-session-token',
-    'X-Session-Token',
-    'x-device-id',
-    'X-Device-Id',
-    'x-requested-with'
-  ]
-}));
+process.env.API_MODE = 'single'; // serviceUrl() ชี้มาที่ตัวเอง (อ่านตอนมี request จึงตั้งตรงนี้ได้)
 
-// 🛡️ จำกัดขนาด body (เดิม 1000mb ส่งก้อนใหญ่มาให้แรมเต็มจน server ล่มได้)
-// 20mb พอสำหรับรูปพนักงาน/รูป Layout แบบ base64 (ไฟล์แนบ Task ใช้ multer แยกต่างหาก)
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ limit: '20mb', extended: true, parameterLimit: 10000 }));
+const { server } = createServiceApp('all-in-one', [
+  staticFilesRoutes,
+  internalEmitRouter,
+  authRoutes,
+  usersRoutes,
+  notificationsRoutes,
+  linesRoutes,
+  stationsRoutes,
+  operatorsRoutes,
+  layoutRoutes,
+  tasksRoutes,
+  excelConfigsRoutes,
+  excelGraphRoutes, // Microsoft Graph (เดิม Port 3000)
+  stationAssignmentsRoutes,
+  plcRoutes,
+  operatorDataRoutes,
+  pmChecklistRoutes, // Daily PM Checklist
+  mesRoutes, // MES Update
+]);
 
-const server = http.createServer(app);
 initRealtime(server);
-
 initDatabase();
-
-// ==========================================
-// 🧭 API Routes
-// ==========================================
-app.use(authRoutes);
-app.use(usersRoutes);
-app.use(notificationsRoutes);
-app.use(linesRoutes);
-app.use(stationsRoutes);
-app.use(operatorsRoutes);
-app.use(layoutRoutes);
-app.use(tasksRoutes);
-app.use(excelConfigsRoutes);
-app.use(excelGraphRoutes); // Microsoft Graph (เดิม Port 3000)
-app.use(stationAssignmentsRoutes);
-app.use(plcRoutes);
-app.use(operatorDataRoutes);
-app.use(pmChecklistRoutes); // Daily PM Checklist
-app.use(mesRoutes); // MES Update (Keyence Modbus -> MES routing-update)
-
-// ==========================================
-// ⚠️ Error handler กลาง: ไฟล์ผิดประเภท / ใหญ่เกิน / body ใหญ่เกิน -> ตอบ JSON 400/413
-// (ต้องอยู่หลัง routes ทั้งหมด)
-// ==========================================
-app.use((err, req, res, next) => {
-  if (res.headersSent) return next(err);
-
-  if (err.code === UPLOAD_TYPE_ERROR) {
-    return res.status(400).json({ success: false, message: err.message });
-  }
-  if (err instanceof multer.MulterError) {
-    const message = err.code === 'LIMIT_FILE_SIZE'
-      ? 'ไฟล์รูปใหญ่เกินไป (ไม่เกิน 20MB ต่อรูป)'
-      : `อัปโหลดไฟล์ไม่สำเร็จ: ${err.message}`;
-    return res.status(400).json({ success: false, message });
-  }
-  if (err.type === 'entity.too.large') {
-    return res.status(413).json({ success: false, message: 'ข้อมูลที่ส่งมาใหญ่เกินไป (ไม่เกิน 20MB)' });
-  }
-
-  console.error('Unhandled API Error:', err);
-  res.status(err.status || 500).json({ success: false, message: 'เกิดข้อผิดพลาดภายในระบบ' });
-});
-
 startPdCallMeEscalation();
 
-// ==========================================
-// 🚀 Start Server (Bind 0.0.0.0 รับการเชื่อมต่อผ่าน Network)
-// ==========================================
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`User & Auth Service running on port ${PORT} (Database: ${process.env.DB_NAME || process.env.DB_USER_NAME || 'Automation'})`);
+server.listen(SINGLE_MODE_PORT, '0.0.0.0', () => {
+  console.log(`✅ API (โหมดรวม) พร้อมทำงานที่ port ${SINGLE_MODE_PORT} (Database: ${process.env.DB_NAME || process.env.DB_USER_NAME || 'Automation'})`);
 });
-

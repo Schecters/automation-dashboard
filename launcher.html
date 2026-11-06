@@ -4,126 +4,161 @@
   <meta charset="UTF-8">
   <title>Automation Server Control Panel</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  </style>
 </head>
-<body class="bg-slate-900 text-slate-100 font-sans p-6 select-none flex flex-col h-screen justify-between">
-  
-  <div>
-    <!-- Header -->
-    <div class="flex items-center justify-between border-b border-slate-700 pb-4 mb-5">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-blue-500/30">
-          ⚙️
-        </div>
-        <div>
-          <h1 class="text-base font-bold text-white tracking-wide">Server Control Panel</h1>
-          <p class="text-xs text-slate-400">ควบคุมและสั่งรัน Backend Services & Web</p>
-        </div>
-      </div>
-      <span id="global-status" class="text-[11px] font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-        ⚪ OFFLINE
-      </span>
-    </div>
+<body class="bg-slate-900 text-slate-100 font-sans p-5 select-none flex flex-col h-screen gap-4">
 
-    <!-- Status Cards -->
-    <div class="grid grid-cols-2 gap-3 mb-5">
-      <div class="p-3 bg-slate-800/80 rounded-2xl border border-slate-700 flex items-center justify-between">
-        <div>
-          <p class="text-[11px] text-slate-400 font-medium">API Service (Auth, Line, Excel)</p>
-          <p class="text-xs font-mono font-bold text-white">Port : 5000</p>
-        </div>
-        <span id="dot-5000" class="w-3.5 h-3.5 rounded-full bg-rose-500/80 ring-4 ring-rose-500/20"></span>
-      </div>
-
-      <div class="p-3 bg-slate-800/80 rounded-2xl border border-slate-700 flex items-center justify-between">
-        <div>
-          <p class="text-[11px] text-slate-400 font-medium">Web Dashboard (Vite)</p>
-          <p class="text-xs font-mono font-bold text-white">Port : 5173</p>
-        </div>
-        <span id="dot-5173" class="w-3.5 h-3.5 rounded-full bg-rose-500/80 ring-4 ring-rose-500/20"></span>
+  <!-- Header -->
+  <div class="flex items-center justify-between border-b border-slate-700 pb-3">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-blue-500/30">⚙️</div>
+      <div>
+        <h1 class="text-base font-bold text-white tracking-wide">Server Control Panel</h1>
+        <p class="text-xs text-slate-400">สั่ง Start / Stop / Restart แต่ละส่วนแยกกัน — ส่วนไหนดับเอง เปิดใหม่อัตโนมัติ</p>
       </div>
     </div>
-
-    <!-- Console Terminal -->
-    <div class="space-y-1.5">
-      <div class="flex items-center justify-between px-1">
-        <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Console Logs</span>
-        <button id="btn-clear-log" class="text-[10px] text-slate-500 hover:text-slate-300">Clear</button>
-      </div>
-      <div id="terminal" class="bg-black/80 rounded-xl p-3 h-48 overflow-y-auto font-mono text-[11px] text-emerald-400 space-y-1 border border-slate-800 leading-relaxed custom-scrollbar shadow-inner">
-        <div class="text-slate-500">> System Ready. กดปุ่ม 'Start Servers' เพื่อเริ่มต้นระบบ...</div>
-      </div>
-    </div>
+    <span id="global-status" class="text-[11px] font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700">⚪ OFFLINE</span>
   </div>
 
-  <!-- Bottom Buttons -->
-  <div class="flex items-center gap-3 pt-4 border-t border-slate-800">
-    <button id="btn-toggle" class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2">
-      <span class="text-sm">▶</span>
-      <span id="btn-text">Start Servers</span>
-    </button>
-    
-    <button id="btn-open-web" disabled class="px-5 py-3 bg-slate-800 text-slate-500 border border-slate-700 text-xs font-bold rounded-xl transition-all flex items-center gap-2 cursor-not-allowed">
-      <span>🌐 Open Web Dashboard</span>
-      <span>↗</span>
-    </button>
+  <!-- ปุ่มรวม -->
+  <div class="flex items-center gap-2">
+    <button id="btn-start-all" class="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/30">▶ Start ทั้งหมด</button>
+    <button id="btn-stop-all" class="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-rose-600/30">■ Stop ทั้งหมด</button>
+    <div class="flex-1"></div>
+    <button id="btn-open-web" class="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl">🌐 เปิดหน้าเว็บ ↗</button>
+  </div>
+
+  <!-- การ์ดแต่ละส่วน -->
+  <div id="cards" class="grid grid-cols-1 gap-2"></div>
+
+  <!-- Console -->
+  <div class="flex-1 min-h-0 flex flex-col gap-1.5">
+    <div class="flex items-center justify-between px-1">
+      <div class="flex items-center gap-2">
+        <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Console Logs</span>
+        <select id="log-filter" class="bg-slate-800 border border-slate-700 rounded-md text-[11px] px-2 py-0.5 text-slate-300">
+          <option value="">ทุกส่วน</option>
+        </select>
+      </div>
+      <button id="btn-clear-log" class="text-[10px] text-slate-500 hover:text-slate-300">Clear</button>
+    </div>
+    <div id="terminal" class="flex-1 min-h-0 bg-black/80 rounded-xl p-3 overflow-y-auto font-mono text-[11px] space-y-0.5 border border-slate-800 leading-relaxed custom-scrollbar select-text">
+      <div class="text-slate-500">> กด "Start ทั้งหมด" หรือ Start ทีละส่วน</div>
+    </div>
   </div>
 
   <script>
     const { ipcRenderer } = require('electron');
 
-    const btnToggle = document.getElementById('btn-toggle');
-    const btnText = document.getElementById('btn-text');
-    const btnOpenWeb = document.getElementById('btn-open-web');
+    const cardsEl = document.getElementById('cards');
     const terminal = document.getElementById('terminal');
+    const filterEl = document.getElementById('log-filter');
     const globalStatus = document.getElementById('global-status');
-    const dot5000 = document.getElementById('dot-5000');
-    const dot5173 = document.getElementById('dot-5173');
-    let isRunning = false;
+    const MAX_LOG_LINES = 2000;
+    let services = [];
+    const state = {};
 
-    function appendLog(msg, colorClass = "text-slate-300") {
-      const line = document.createElement('div');
-      line.className = colorClass;
-      line.textContent = `> ${msg}`;
-      terminal.appendChild(line);
-      terminal.scrollTop = terminal.scrollHeight;
+    const STATUS = {
+      stopped:    { dot: 'bg-slate-500', ring: 'ring-slate-500/20', text: 'หยุด', cls: 'text-slate-400' },
+      starting:   { dot: 'bg-amber-400 animate-pulse', ring: 'ring-amber-400/20', text: 'กำลังเริ่ม', cls: 'text-amber-300' },
+      restarting: { dot: 'bg-amber-400 animate-pulse', ring: 'ring-amber-400/20', text: 'ดับ — กำลังเปิดใหม่', cls: 'text-amber-300' },
+      stopping:   { dot: 'bg-amber-400', ring: 'ring-amber-400/20', text: 'กำลังหยุด', cls: 'text-amber-300' },
+      running:    { dot: 'bg-emerald-400', ring: 'ring-emerald-400/20', text: 'ทำงาน', cls: 'text-emerald-400' },
+      unhealthy:  { dot: 'bg-orange-500 animate-pulse', ring: 'ring-orange-500/20', text: 'ไม่ตอบสนอง', cls: 'text-orange-400' },
+      failed:     { dot: 'bg-rose-500', ring: 'ring-rose-500/30', text: 'ดับ (หยุดเปิดใหม่)', cls: 'text-rose-400' },
+    };
+
+    const btn = (label, cls, action, id) =>
+      `<button data-action="${action}" data-id="${id}" class="px-3 py-1.5 rounded-lg text-[11px] font-bold ${cls}">${label}</button>`;
+
+    function renderCards() {
+      cardsEl.innerHTML = services.map((s) => `
+        <div class="p-3 bg-slate-800/80 rounded-xl border border-slate-700 flex items-center gap-3">
+          <span id="dot-${s.id}" class="w-3.5 h-3.5 shrink-0 rounded-full ring-4"></span>
+          <div class="flex-1 min-w-0">
+            <div class="text-xs font-bold text-white truncate">${s.name}</div>
+            <div class="text-[11px] text-slate-400 font-mono">
+              Port ${s.port} <span class="text-slate-500">· ${s.id}${s.host === '127.0.0.1' ? ' · ภายในเครื่อง' : ''}</span>
+              <span id="st-${s.id}" class="ml-2"></span>
+            </div>
+          </div>
+          ${btn('▶ Start', 'bg-emerald-600/90 hover:bg-emerald-500 text-white', 'svc-start', s.id)}
+          ${btn('⟳ Restart', 'bg-blue-600/90 hover:bg-blue-500 text-white', 'svc-restart', s.id)}
+          ${btn('■ Stop', 'bg-slate-700 hover:bg-slate-600 text-slate-200', 'svc-stop', s.id)}
+        </div>`).join('');
+      filterEl.innerHTML = '<option value="">ทุกส่วน</option>' +
+        services.map((s) => `<option value="${s.id}">${s.name}</option>`).join('');
+      services.forEach((s) => paint(s.id));
     }
 
+    function paint(id) {
+      const st = state[id] || { status: 'stopped' };
+      const look = STATUS[st.status] || STATUS.stopped;
+      const dot = document.getElementById(`dot-${id}`);
+      const label = document.getElementById(`st-${id}`);
+      if (!dot || !label) return;
+      dot.className = `w-3.5 h-3.5 shrink-0 rounded-full ring-4 ${look.dot} ${look.ring}`;
+      const extra = [st.building ? '🔨 กำลัง build' : '', st.crashes ? `ดับ ${st.crashes} ครั้ง` : ''].filter(Boolean).join(' · ');
+      label.className = `ml-2 font-sans font-bold ${look.cls}`;
+      label.textContent = `● ${look.text}${extra ? ` (${extra})` : ''}`;
+
+      const all = services.map((s) => (state[s.id] || {}).status);
+      const running = all.filter((x) => x === 'running').length;
+      if (running === 0) {
+        globalStatus.className = 'text-[11px] font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700';
+        globalStatus.textContent = '⚪ OFFLINE';
+      } else if (running === services.length) {
+        globalStatus.className = 'text-[11px] font-bold px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+        globalStatus.textContent = `🟢 RUNNING ${running}/${services.length}`;
+      } else {
+        globalStatus.className = 'text-[11px] font-bold px-3 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20';
+        globalStatus.textContent = `🟡 RUNNING ${running}/${services.length}`;
+      }
+    }
+
+    function appendLog({ id, text, level }) {
+      const line = document.createElement('div');
+      line.dataset.id = String(id).split(':')[0];
+      line.className = level === 'error' ? 'text-rose-400' : 'text-emerald-400';
+      line.textContent = `[${id}] ${text}`;
+      if (filterEl.value && line.dataset.id !== filterEl.value) line.style.display = 'none';
+      const atBottom = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 20;
+      terminal.appendChild(line);
+      while (terminal.childElementCount > MAX_LOG_LINES) terminal.removeChild(terminal.firstChild);
+      if (atBottom) terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    cardsEl.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-action]');
+      if (b) ipcRenderer.send(b.dataset.action, b.dataset.id);
+    });
+    document.getElementById('btn-start-all').addEventListener('click', () => ipcRenderer.send('start-all'));
+    document.getElementById('btn-stop-all').addEventListener('click', () => ipcRenderer.send('stop-all'));
+    document.getElementById('btn-open-web').addEventListener('click', () => ipcRenderer.send('open-browser'));
     document.getElementById('btn-clear-log').addEventListener('click', () => {
       terminal.innerHTML = '<div class="text-slate-500">> Log cleared.</div>';
     });
-
-    btnToggle.addEventListener('click', () => {
-      if (!isRunning) {
-        ipcRenderer.send('start-servers');
-        btnToggle.className = "flex-1 py-3 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2";
-        btnText.textContent = "Stop Servers";
-        globalStatus.className = "text-[11px] font-bold px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-        globalStatus.textContent = "🟢 RUNNING";
-        dot5000.className = "w-3.5 h-3.5 rounded-full bg-emerald-400 ring-4 ring-emerald-400/20";
-        dot5173.className = "w-3.5 h-3.5 rounded-full bg-emerald-400 ring-4 ring-emerald-400/20";
-        btnOpenWeb.disabled = false;
-        btnOpenWeb.className = "px-5 py-3 bg-blue-600 hover:bg-blue-500 text-white border border-blue-500 text-xs font-bold rounded-xl transition-all shadow-md shadow-blue-500/20 flex items-center gap-2 cursor-pointer";
-        isRunning = true;
-      } else {
-        ipcRenderer.send('stop-servers');
-        btnToggle.className = "flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2";
-        btnText.textContent = "Start Servers";
-        globalStatus.className = "text-[11px] font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700";
-        globalStatus.textContent = "⚪ OFFLINE";
-        dot5000.className = "w-3.5 h-3.5 rounded-full bg-rose-500/80 ring-4 ring-rose-500/20";
-        dot5173.className = "w-3.5 h-3.5 rounded-full bg-rose-500/80 ring-4 ring-rose-500/20";
-        btnOpenWeb.disabled = true;
-        btnOpenWeb.className = "px-5 py-3 bg-slate-800 text-slate-500 border border-slate-700 text-xs font-bold rounded-xl flex items-center gap-2 cursor-not-allowed";
-        isRunning = false;
-      }
+    filterEl.addEventListener('change', () => {
+      [...terminal.children].forEach((el) => {
+        el.style.display = !filterEl.value || !el.dataset.id || el.dataset.id === filterEl.value ? '' : 'none';
+      });
+      terminal.scrollTop = terminal.scrollHeight;
     });
 
-    btnOpenWeb.addEventListener('click', () => {
-      ipcRenderer.send('open-browser');
+    ipcRenderer.on('svc-config', (e, cfg) => {
+      services = cfg.services;
+      renderCards();
     });
+    ipcRenderer.on('svc-status', (e, st) => {
+      state[st.id] = st;
+      paint(st.id);
+    });
+    ipcRenderer.on('svc-log', (e, entry) => appendLog(entry));
 
-    ipcRenderer.on('server-log', (event, data) => appendLog(data, 'text-emerald-400'));
-    ipcRenderer.on('server-error', (event, data) => appendLog(data, 'text-rose-400'));
+    ipcRenderer.send('launcher-ready');
   </script>
 </body>
 </html>

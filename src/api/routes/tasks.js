@@ -1,6 +1,6 @@
 import express from 'express';
 import { pool } from '../lib/db.js';
-import { io, deviceSessions } from '../lib/realtime.js';
+import { io, userRoom } from '../lib/realtime.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { recordAuditLog } from '../lib/audit.js';
 import { upload } from '../lib/uploads.js';
@@ -221,22 +221,19 @@ router.post('/api/tasks', authenticateToken, upload.array('images', 5), async (r
       );
       const savedNotif = notifResult.rows[0];
 
-      for (const [dId, session] of deviceSessions.entries()) {
-        if (String(session.employeeId) === String(empId) && session.socketId) {
-          io.to(session.socketId).emit('new_notification', {
-            id: savedNotif.id,
-            title: savedNotif.title,
-            message: savedNotif.message,
-            problem: savedNotif.problem,
-            taskId: savedNotif.task_id,
-            image_url: primaryImageUrl,
-            images: imageUrls,
-            task_type: cleanTaskType,
-            created_at: savedNotif.created_at,
-            read: false
-          });
-        }
-      }
+      // ส่งให้ทุกอุปกรณ์ที่ออนไลน์ของคนนี้ (ห้อง user:<id> อยู่ที่ service realtime)
+      io.to(userRoom(empId)).emit('new_notification', {
+        id: savedNotif.id,
+        title: savedNotif.title,
+        message: savedNotif.message,
+        problem: savedNotif.problem,
+        taskId: savedNotif.task_id,
+        image_url: primaryImageUrl,
+        images: imageUrls,
+        task_type: cleanTaskType,
+        created_at: savedNotif.created_at,
+        read: false
+      });
     }
 
     await client.query('COMMIT');

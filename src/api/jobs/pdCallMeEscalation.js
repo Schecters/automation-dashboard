@@ -1,5 +1,5 @@
 import { pool } from '../lib/db.js';
-import { io, deviceSessions } from '../lib/realtime.js';
+import { io, userRoom } from '../lib/realtime.js';
 
 // แจ้งเตือน ME เมื่องาน PD Call ME ค้างเกิน 15 นาที (ตรวจทุก 1 นาที)
 export const startPdCallMeEscalation = () => {
@@ -38,22 +38,18 @@ export const startPdCallMeEscalation = () => {
             [empId, task.lines, task.task_id, title, message, task.problem]
           );
 
-          for (const [dId, session] of deviceSessions.entries()) {
-            if (String(session.employeeId) === String(empId) && session.socketId) {
-              io.to(session.socketId).emit('new_notification', {
-                id: notifRes.rows[0].id,
-                title,
-                message,
-                problem: task.problem,
-                taskId: task.task_id,
-                image_url: task.image_url,
-                images: task.images,
-                task_type: 'pd_call_me',
-                created_at: notifRes.rows[0].created_at,
-                read: false
-              });
-            }
-          }
+          io.to(userRoom(empId)).emit('new_notification', {
+            id: notifRes.rows[0].id,
+            title,
+            message,
+            problem: task.problem,
+            taskId: task.task_id,
+            image_url: task.image_url,
+            images: task.images,
+            task_type: 'pd_call_me',
+            created_at: notifRes.rows[0].created_at,
+            read: false
+          });
         }
 
         io.emit('task_status_updated', task);

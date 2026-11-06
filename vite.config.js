@@ -1,36 +1,31 @@
+/* global process */
+import { readFileSync } from 'fs';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import tailwindcss from '@tailwindcss/vite';
 
-// Proxy ไป API (port 5000) ใช้ร่วมกันทั้งโหมด dev และ preview (production)
-const apiProxy = {
-  // ทุก API (รวม Microsoft Graph ที่เคยอยู่ Port 3000) วิ่งไปพอร์ต 5000
-  '/api': {
-    target: 'http://127.0.0.1:5000',
-    changeOrigin: true,
-    secure: false,
-    xfwd: true,
-  },
-  '/socket.io': {
-    target: 'http://127.0.0.1:5000',
-    ws: true,
-    changeOrigin: true,
-    xfwd: true,
-  },
-  '/uploads': {
-    target: 'http://127.0.0.1:5000',
-    changeOrigin: true,
-    xfwd: true,
-  },
-  // /publics/* ส่งไป 5000 ตรงๆ (routes/excelGraph.js รับ path /publics/... ไว้แล้ว)
-  '/publics': {
-    target: 'http://127.0.0.1:5000',
-    changeOrigin: true,
-    secure: false,
-    xfwd: true,
-  },
-};
+// Proxy ไป backend แต่ละส่วน ตาม services.json (ใช้ร่วมกันทั้งโหมด dev และ preview)
+//  - เรียงตาม services.json: เฉพาะเจาะจงก่อน (เช่น /api/mes → MES 5004) ที่เหลือ /api → data 5000
+//  - API_MODE=single (รัน node src/api/server.js ตัวเดียว) → ทุกอย่างไป 5000 แบบเดิม
+const servicesConfig = JSON.parse(readFileSync(new URL('./services.json', import.meta.url), 'utf8'));
+const singleMode = process.env.API_MODE === 'single';
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const apiProxy = {};
+for (const svc of servicesConfig.services) {
+  const target = `http://127.0.0.1:${singleMode ? 5000 : svc.port}`;
+  for (const prefix of svc.prefixes) {
+    // ตรงทั้งท่อน: /api/mes ตรง /api/mes/logs แต่ไม่ตรง /api/messages
+    apiProxy[`^${escapeRegex(prefix)}(?=/|\\?|$)`] = {
+      target,
+      changeOrigin: true,
+      secure: false,
+      xfwd: true,
+      ws: svc.id === 'realtime',
+    };
+  }
+}
 
 export default defineConfig({
   plugins: [

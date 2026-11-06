@@ -39,11 +39,13 @@ git pull
 
 จากนั้น restart:
 
-- แก้ฝั่ง API (`src/api/**`) → กด Stop แล้ว Start ใน launcher หรือรัน `node .\src\api\server.js` ใหม่
+- แก้ฝั่ง API → กด **Restart เฉพาะส่วนที่แก้** ใน launcher (ดูตาราง "backend แยกเป็นหลาย service" ด้านล่างว่าไฟล์ไหนอยู่ส่วนไหน)
+  เช่น แก้ `routes/mes.js` → Restart "MES Update" อย่างเดียว / แก้ `src/api/lib/**` ที่ใช้ร่วมกัน → Restart ทุกส่วนที่ import ไฟล์นั้น (ไม่แน่ใจ = Stop ทั้งหมด → Start ทั้งหมด)
 - แก้ `launcher-main.cjs` / `launcher.html` → ปิด launcher แล้วเปิดใหม่ (ถ้าใช้ `.exe` ต้อง `npm run build:launcher` ใหม่)
-- แก้หน้าเว็บ (`src/components/**`, `src/pages/**` ฯลฯ) → **ต้องกด Stop แล้ว Start ใน launcher** เพื่อ build ใหม่
-  (server ใช้ `vite build` + `vite preview` ไม่ใช่ `vite dev` แล้ว จึงไม่โหลดไฟล์ใหม่เอง) แล้วผู้ใช้กดรีเฟรชหน้าเว็บ
+- แก้หน้าเว็บ (`src/components/**`, `src/pages/**` ฯลฯ) → กด **Restart ที่ "หน้าเว็บ (Vite)"** ใน launcher
+  (build ใหม่ขณะเว็บเดิมยังเปิดอยู่ แล้วสลับ — ดับแค่ ~2 วินาที / build ไม่ผ่าน = เว็บเดิมใช้ต่อ) แล้วผู้ใช้กดรีเฟรชหน้าเว็บ
   ถ้าไม่ใช้ launcher: `npm run start:web`
+- แก้ `services.json` (port / path) → Stop ทั้งหมด แล้วปิดเปิด launcher ใหม่ (ไม่ต้อง build .exe ใหม่)
 - มี package ใหม่ใน `package.json` → `npm install` ก่อน restart
 
 ## ✏️ ถ้าแก้โค้ดบน server โดยตรง → push กลับขึ้น GitHub
@@ -90,10 +92,30 @@ git push
 
 ## 📌 ข้อมูลระบบที่ควรรู้
 
-- API ทั้งหมดรวมอยู่ที่ port **5000** (`src/api/server.js`) — port 3000 (`excel.js`) เลิกใช้แล้ว
-- หน้าเว็บ port **5173** (https) proxy `/api`, `/publics`, `/uploads`, `/socket.io` ไปที่ 5000
+- **backend แยกเป็นหลาย service** (process แยกกัน ส่วนหนึ่งดับ / รีสตาร์ท ส่วนอื่นยังทำงาน) — ตารางกลางอยู่ที่ `services.json`
+  entry แต่ละตัวที่ `src/api/services/<id>.js` (ใช้ `createServiceApp` / `listenService` ใน `src/api/lib/service.js`)
+
+  | Port | id | ไฟล์ (`src/api/routes/`) | เปิดให้ |
+  |---|---|---|---|
+  | **5000** | data | `lines`, `stations`, `layout`, `stationAssignments`, `operators`, `operatorData`, `plc`, `staticFiles` + `initDatabase()` | ทั้ง LAN (.NET เรียก `/api/plc/sequence/*`, เว็บ OI เรียก `/api/operator-data`) |
+  | 5001 | auth | `auth`, `users` | ภายในเครื่อง |
+  | 5002 | realtime | socket.io (`lib/realtime.js`) | ภายในเครื่อง |
+  | 5003 | graph | `excelGraph`, `excelConfigs` (Microsoft Graph token อยู่ที่นี่ตัวเดียว) | ภายในเครื่อง |
+  | 5004 | mes | `mes` | ภายในเครื่อง |
+  | 5005 | work | `tasks`, `pmChecklist`, `notifications` + `jobs/pdCallMeEscalation.js` | ภายในเครื่อง |
+
+  - service ภายในเครื่อง bind `127.0.0.1` เข้าได้ผ่านหน้าเว็บ 5173 หรือผ่าน 5000 เท่านั้น
+  - port 5000 **ส่งต่อ** path ของ service อื่นให้ (`forwardToOtherServices`) โปรแกรมเก่าที่เรียก `:5000/api/...` ตรงจึงยังใช้ได้ / ปลายทางปิด = 503
+  - service คุยกันเอง: `serviceUrl('<id>')` (`lib/serviceMap.js`) เช่น อ่านคะแนน Excel → `serviceUrl('graph')/publics/excel-scores`
+  - realtime: route ทุกตัวใช้ `io.emit(...)` / `io.to(room).emit(...)` จาก `lib/realtime.js` ได้เหมือนเดิม — ส่ง HTTP ไปที่ service realtime ให้ (`POST /internal/emit`, key คำนวณจาก `JWT_SECRET`)
+    ห้องที่มี: `user:<employee_id>` (`userRoom()`), `device:<deviceId>` / เตะ session: `kickOtherSessions`, `logoutDevice` / ห้ามใช้ `deviceSessions` ตรง (อยู่ใน process realtime เท่านั้น)
+  - เพิ่ม route ใหม่: ใส่ใน service ของเรื่องนั้น + ถ้า path ขึ้นต้นใหม่ ต้องเพิ่มใน `prefixes` ของ `services.json` (ไม่งั้นจะไปตกที่ data 5000)
+  - launcher: Start / Stop / Restart ทีละส่วน, เช็ค `GET /internal/health` ทุก 5 วินาที, ดับเอง = เปิดใหม่ใน 3 วินาที (เกิน 5 ครั้งใน 2 นาที = หยุด สถานะแดง)
+  - โหมดรวม (ฉุกเฉิน / ทดสอบ): `npm run api:single` = `node src/api/server.js` ทุกอย่างใน 5000 ตัวเดียว (ห้ามรันพร้อม launcher) + หน้าเว็บต้องรันด้วย `API_MODE=single`
+  - เครื่อง dev: `npm run api:all` (เปิดทุก service) + `npm run dev` / เครื่อง dev ไม่มี Database (อยู่บน server) API ที่ใช้ DB จะตอบ 500 เป็นเรื่องปกติ
+- หน้าเว็บ port **5173** (https) proxy แต่ละ path ไป service ตาม `services.json` (`vite.config.js` สร้าง `apiProxy` จากไฟล์นี้)
   - บน server: launcher รัน `vite build` แล้ว `vite preview` (โหมดใช้งานจริง ไม่มี source map)
-  - บนเครื่อง dev: `npm run dev` ได้ตามปกติ (proxy ชุดเดียวกัน อยู่ใน `vite.config.js` ตัวแปร `apiProxy`)
+  - บนเครื่อง dev: `npm run dev` ได้ตามปกติ (proxy ชุดเดียวกัน)
 - อัปโหลดไฟล์รับเฉพาะรูป JPG/PNG/WEBP/GIF ไม่เกิน 20MB (`src/api/lib/uploads.js`), body JSON ไม่เกิน 20MB
 - สิทธิ์ตรวจจาก role ใน DB เสมอ (`authenticateToken` ใน `src/api/middleware/auth.js`) ไม่เชื่อ role ใน JWT
 - 1 บัญชี ใช้ได้ 1 session (`current_session_token`) login ที่ใหม่จะเตะเครื่องเก่าออก

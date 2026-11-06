@@ -1,6 +1,6 @@
 import express from 'express';
 import { pool } from '../lib/db.js';
-import { PORT } from '../lib/config.js';
+import { serviceUrl } from '../lib/serviceMap.js';
 import { findOperatorExams } from '../lib/operatorExams.js';
 
 const router = express.Router();
@@ -94,7 +94,7 @@ router.all('/api/operator-data', async (req, res) => {
       let userScore = null;
       let rawList = [];
 
-      const targetUrl = `http://127.0.0.1:${PORT}/publics/excel-scores?configKey=${encodeURIComponent(exam.config_key)}&t=${Date.now()}`;
+      const targetUrl = `${serviceUrl('graph')}/publics/excel-scores?configKey=${encodeURIComponent(exam.config_key)}&t=${Date.now()}`;
       try {
         const fetchRes = await fetch(targetUrl);
         if (fetchRes.ok) {

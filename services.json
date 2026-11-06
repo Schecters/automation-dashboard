@@ -1,0 +1,58 @@
+{
+  "_comment": "ตารางกลางของ backend แต่ละส่วน — launcher, vite.config.js และ API อ่านไฟล์นี้ / เรียงลำดับ = ลำดับการจับ path (เฉพาะเจาะจงก่อน, data เป็นตัวรับที่เหลือทั้งหมด)",
+  "web": { "id": "web", "name": "หน้าเว็บ (Vite)", "port": 5173 },
+  "services": [
+    {
+      "id": "realtime",
+      "name": "Realtime (socket.io)",
+      "port": 5002,
+      "host": "127.0.0.1",
+      "entry": "src/api/services/realtime.js",
+      "prefixes": ["/socket.io"]
+    },
+    {
+      "id": "graph",
+      "name": "Microsoft Graph / Excel",
+      "port": 5003,
+      "host": "127.0.0.1",
+      "entry": "src/api/services/graph.js",
+      "prefixes": [
+        "/publics", "/api/excel", "/api/excel-configs", "/api/excel-targets", "/api/excel-scores",
+        "/api/check-auth", "/api/search", "/api/users/photo-by-email",
+        "/check-auth", "/search", "/excel", "/excel-configs", "/excel-scores", "/users/photo-by-email"
+      ]
+    },
+    {
+      "id": "auth",
+      "name": "Login / ผู้ใช้",
+      "port": 5001,
+      "host": "127.0.0.1",
+      "entry": "src/api/services/auth.js",
+      "prefixes": ["/api/login", "/api/logout", "/api/register", "/api/auth", "/api/roles", "/api/users", "/api/audit-logs"]
+    },
+    {
+      "id": "mes",
+      "name": "MES Update",
+      "port": 5004,
+      "host": "127.0.0.1",
+      "entry": "src/api/services/mes.js",
+      "prefixes": ["/api/mes"]
+    },
+    {
+      "id": "work",
+      "name": "งานซ่อม / PM / แจ้งเตือน",
+      "port": 5005,
+      "host": "127.0.0.1",
+      "entry": "src/api/services/work.js",
+      "prefixes": ["/api/tasks", "/api/pm", "/api/notifications"]
+    },
+    {
+      "id": "data",
+      "name": "ข้อมูลหลัก + API ภายนอก",
+      "port": 5000,
+      "host": "0.0.0.0",
+      "entry": "src/api/services/data.js",
+      "prefixes": ["/api", "/uploads"]
+    }
+  ]
+}
