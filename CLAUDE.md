@@ -123,5 +123,5 @@ git push
     แก้ได้เฉพาะ ME, admin (หน้าตั้งค่าต้อง login) / ล้างข้อมูลเบราว์เซอร์ = ต้องตั้งค่าใหม่
   - ประวัติการส่ง: ไฟล์ CSV ที่ `MES_LOG_DIR` (default `D:\MES logs`) — `YYYY-MM-DD.csv` และ `login_YYYY-MM.csv` (`src/api/lib/mesLog.js`)
   - ยอด OK / NG ของกะปัจจุบัน (กะเช้า 07:40-19:40 / กะดึก 19:40-07:40) นับจากไฟล์ CSV เดียวกัน เฉพาะที่ส่งสำเร็จ
-    (OK = PASS/INPUT, NG = FAIL) แยกต่อเครื่อง + ต่อ station: `GET /api/mes/shift-summary?terminal=` (`readShiftSummary`)
+    (OK = PASS/INPUT, NG = FAIL) แสดงเป็นป้ายที่แต่ละ station: `GET /api/mes/shift-summary?terminal=` (`readShiftSummary`)
   - ตาราง `automation_lines.mes_*` ที่เคยสร้างไว้รุ่นก่อน เลิกใช้แล้ว (ลบได้)
