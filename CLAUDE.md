@@ -41,7 +41,11 @@ git pull
 
 - แก้ฝั่ง API → กด **Restart เฉพาะส่วนที่แก้** ใน launcher (ดูตาราง "backend แยกเป็นหลาย service" ด้านล่างว่าไฟล์ไหนอยู่ส่วนไหน)
   เช่น แก้ `routes/mes.js` → Restart "MES Update" อย่างเดียว / แก้ `src/api/lib/**` ที่ใช้ร่วมกัน → Restart ทุกส่วนที่ import ไฟล์นั้น (ไม่แน่ใจ = Stop ทั้งหมด → Start ทั้งหมด)
-- แก้ `launcher-main.cjs` / `launcher.html` → ปิด launcher แล้วเปิดใหม่ (ถ้าใช้ `.exe` ต้อง `npm run build:launcher` ใหม่)
+- แก้ `launcher-main.cjs` / `launcher.html` → ปิด launcher แล้วเปิดใหม่
+  - เปิดแบบไม่ต้อง build: `npm run start:launcher`
+  - ใช้ `.exe`: `npm run build:launcher:dir` → `release\win-unpacked\Automation Server Control.exe` (ใช้ Electron ใน node_modules ไม่ต้องโหลดจากเน็ต)
+    (`npm run build:launcher` แบบ portable ต้องโหลด NSIS จาก GitHub — เน็ตบน server ตัด ECONNRESET ใช้ไม่ได้)
+  - `.exe` ตัวเก่าที่ build ก่อนแยก service ห้ามใช้ (มี launcher เก่าฝังอยู่)
 - แก้หน้าเว็บ (`src/components/**`, `src/pages/**` ฯลฯ) → กด **Restart ที่ "หน้าเว็บ (Vite)"** ใน launcher
   (build ใหม่ขณะเว็บเดิมยังเปิดอยู่ แล้วสลับ — ดับแค่ ~2 วินาที / build ไม่ผ่าน = เว็บเดิมใช้ต่อ) แล้วผู้ใช้กดรีเฟรชหน้าเว็บ
   ถ้าไม่ใช้ launcher: `npm run start:web`

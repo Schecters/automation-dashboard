@@ -13,7 +13,8 @@
     "api:all": "concurrently -n data,realtime,auth,graph,mes,work -c blue,magenta,green,yellow,cyan,white \"node src/api/services/data.js\" \"node src/api/services/realtime.js\" \"node src/api/services/auth.js\" \"node src/api/services/graph.js\" \"node src/api/services/mes.js\" \"node src/api/services/work.js\"",
     "api:single": "node src/api/server.js",
     "start:launcher": "electron launcher-main.cjs",
-    "build:launcher": "electron-builder --win portable --x64"
+    "build:launcher": "electron-builder --win portable --x64",
+    "build:launcher:dir": "electron-builder --win dir --x64"
   },
   "dependencies": {
     "@azure/identity": "^4.13.2",
@@ -61,6 +62,7 @@
     "productName": "Automation Server Control",
     "npmRebuild": false,
     "nodeGypRebuild": false,
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
     },
@@ -70,6 +72,7 @@
       "package.json"
     ],
     "win": {
+      "signAndEditExecutable": false,
       "target": [
         {
           "target": "dir",
