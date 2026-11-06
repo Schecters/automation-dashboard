@@ -350,7 +350,7 @@ async function healthTick() {
 function createWindow() {
   win = new BrowserWindow({
     width: 900,
-    height: 760,
+    height: 880,
     minWidth: 760,
     minHeight: 600,
     autoHideMenuBar: true,

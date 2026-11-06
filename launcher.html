@@ -3,51 +3,98 @@
 <head>
   <meta charset="UTF-8">
   <title>Automation Server Control Panel</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- ไม่โหลดอะไรจากอินเทอร์เน็ต (server ไม่มีเน็ต) — style ทั้งหมดอยู่ในไฟล์นี้ -->
   <style>
-    .custom-scrollbar::-webkit-scrollbar { width: 8px; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #0f172a; color: #f1f5f9; padding: 20px; gap: 16px;
+      font-family: "Segoe UI", "Leelawadee UI", Tahoma, sans-serif; font-size: 13px;
+      display: flex; flex-direction: column; user-select: none;
+    }
+    button { font-family: inherit; cursor: pointer; border: 0; color: #fff; font-weight: 700; border-radius: 10px; }
+    button:active { transform: scale(0.98); }
+
+    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; padding-bottom: 12px; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .logo { width: 40px; height: 40px; border-radius: 12px; background: #2563eb; display: flex; align-items: center; justify-content: center; font-size: 20px; box-shadow: 0 6px 16px rgba(37,99,235,.35); }
+    h1 { margin: 0; font-size: 16px; color: #fff; letter-spacing: .3px; }
+    .sub { margin: 2px 0 0; font-size: 12px; color: #94a3b8; }
+    .pill { font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 999px; border: 1px solid #334155; background: #1e293b; color: #94a3b8; white-space: nowrap; }
+    .pill.ok { background: rgba(16,185,129,.1); color: #34d399; border-color: rgba(16,185,129,.25); }
+    .pill.part { background: rgba(245,158,11,.1); color: #fcd34d; border-color: rgba(245,158,11,.25); }
+
+    .toolbar { display: flex; align-items: center; gap: 8px; }
+    .toolbar .spacer { flex: 1; }
+    .btn-lg { padding: 10px 16px; font-size: 12px; }
+    .green { background: #059669; } .green:hover { background: #10b981; }
+    .red { background: #e11d48; } .red:hover { background: #f43f5e; }
+    .blue { background: #2563eb; } .blue:hover { background: #3b82f6; }
+    .gray { background: #334155; color: #e2e8f0; } .gray:hover { background: #475569; }
+
+    #cards { display: flex; flex-direction: column; gap: 8px; }
+    .card { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: rgba(30,41,59,.85); border: 1px solid #334155; border-radius: 12px; }
+    .card .info { flex: 1; min-width: 0; }
+    .card .name { font-size: 12px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card .meta { font-size: 11px; color: #94a3b8; font-family: Consolas, monospace; margin-top: 2px; }
+    .card .meta .dim { color: #64748b; }
+    .card .state { margin-left: 8px; font-family: "Segoe UI", "Leelawadee UI", sans-serif; font-weight: 700; }
+    .card button { padding: 6px 12px; font-size: 11px; border-radius: 8px; }
+
+    .dot { width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%; background: #64748b; box-shadow: 0 0 0 4px rgba(100,116,139,.2); }
+    .s-stopped .dot { background: #64748b; box-shadow: 0 0 0 4px rgba(100,116,139,.2); }  .s-stopped .state { color: #94a3b8; }
+    .s-running .dot { background: #34d399; box-shadow: 0 0 0 4px rgba(52,211,153,.2); }  .s-running .state { color: #34d399; }
+    .s-starting .dot, .s-restarting .dot, .s-stopping .dot { background: #fbbf24; box-shadow: 0 0 0 4px rgba(251,191,36,.2); }
+    .s-starting .state, .s-restarting .state, .s-stopping .state { color: #fcd34d; }
+    .s-starting .dot, .s-restarting .dot { animation: pulse 1.2s infinite; }
+    .s-unhealthy .dot { background: #f97316; box-shadow: 0 0 0 4px rgba(249,115,22,.2); animation: pulse 1.2s infinite; } .s-unhealthy .state { color: #fb923c; }
+    .s-failed .dot { background: #f43f5e; box-shadow: 0 0 0 4px rgba(244,63,94,.3); }  .s-failed .state { color: #fb7185; }
+    @keyframes pulse { 50% { opacity: .4; } }
+
+    .console { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+    .console-head { display: flex; align-items: center; justify-content: space-between; padding: 0 4px; }
+    .console-head .label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .6px; margin-right: 8px; }
+    select { background: #1e293b; border: 1px solid #334155; border-radius: 6px; font-size: 11px; padding: 2px 8px; color: #cbd5e1; font-family: inherit; }
+    .link { background: none; color: #64748b; font-size: 10px; font-weight: 400; } .link:hover { color: #cbd5e1; }
+    #terminal {
+      flex: 1; min-height: 120px; overflow-y: auto; background: rgba(0,0,0,.8); border: 1px solid #1e293b; border-radius: 12px;
+      padding: 12px; font-family: Consolas, monospace; font-size: 11px; line-height: 1.6; user-select: text;
+    }
+    #terminal .info { color: #34d399; } #terminal .error { color: #fb7185; } #terminal .muted { color: #64748b; }
+    #terminal::-webkit-scrollbar { width: 8px; } #terminal::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
   </style>
 </head>
-<body class="bg-slate-900 text-slate-100 font-sans p-5 select-none flex flex-col h-screen gap-4">
+<body>
 
-  <!-- Header -->
-  <div class="flex items-center justify-between border-b border-slate-700 pb-3">
-    <div class="flex items-center gap-3">
-      <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-blue-500/30">⚙️</div>
+  <div class="header">
+    <div class="brand">
+      <div class="logo">⚙️</div>
       <div>
-        <h1 class="text-base font-bold text-white tracking-wide">Server Control Panel</h1>
-        <p class="text-xs text-slate-400">สั่ง Start / Stop / Restart แต่ละส่วนแยกกัน — ส่วนไหนดับเอง เปิดใหม่อัตโนมัติ</p>
+        <h1>Server Control Panel</h1>
+        <p class="sub">สั่ง Start / Stop / Restart แต่ละส่วนแยกกัน — ส่วนไหนดับเอง เปิดใหม่อัตโนมัติ</p>
       </div>
     </div>
-    <span id="global-status" class="text-[11px] font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700">⚪ OFFLINE</span>
+    <span id="global-status" class="pill">⚪ OFFLINE</span>
   </div>
 
-  <!-- ปุ่มรวม -->
-  <div class="flex items-center gap-2">
-    <button id="btn-start-all" class="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/30">▶ Start ทั้งหมด</button>
-    <button id="btn-stop-all" class="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-rose-600/30">■ Stop ทั้งหมด</button>
-    <div class="flex-1"></div>
-    <button id="btn-open-web" class="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl">🌐 เปิดหน้าเว็บ ↗</button>
+  <div class="toolbar">
+    <button id="btn-start-all" class="btn-lg green">▶ Start ทั้งหมด</button>
+    <button id="btn-stop-all" class="btn-lg red">■ Stop ทั้งหมด</button>
+    <div class="spacer"></div>
+    <button id="btn-open-web" class="btn-lg blue">🌐 เปิดหน้าเว็บ ↗</button>
   </div>
 
-  <!-- การ์ดแต่ละส่วน -->
-  <div id="cards" class="grid grid-cols-1 gap-2"></div>
+  <div id="cards"></div>
 
-  <!-- Console -->
-  <div class="flex-1 min-h-0 flex flex-col gap-1.5">
-    <div class="flex items-center justify-between px-1">
-      <div class="flex items-center gap-2">
-        <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Console Logs</span>
-        <select id="log-filter" class="bg-slate-800 border border-slate-700 rounded-md text-[11px] px-2 py-0.5 text-slate-300">
-          <option value="">ทุกส่วน</option>
-        </select>
+  <div class="console">
+    <div class="console-head">
+      <div>
+        <span class="label">Console Logs</span>
+        <select id="log-filter"><option value="">ทุกส่วน</option></select>
       </div>
-      <button id="btn-clear-log" class="text-[10px] text-slate-500 hover:text-slate-300">Clear</button>
+      <button id="btn-clear-log" class="link">Clear</button>
     </div>
-    <div id="terminal" class="flex-1 min-h-0 bg-black/80 rounded-xl p-3 overflow-y-auto font-mono text-[11px] space-y-0.5 border border-slate-800 leading-relaxed custom-scrollbar select-text">
-      <div class="text-slate-500">> กด "Start ทั้งหมด" หรือ Start ทีละส่วน</div>
-    </div>
+    <div id="terminal"><div class="muted">&gt; กด "Start ทั้งหมด" หรือ Start ทีละส่วน</div></div>
   </div>
 
   <script>
@@ -61,60 +108,58 @@
     let services = [];
     const state = {};
 
-    const STATUS = {
-      stopped:    { dot: 'bg-slate-500', ring: 'ring-slate-500/20', text: 'หยุด', cls: 'text-slate-400' },
-      starting:   { dot: 'bg-amber-400 animate-pulse', ring: 'ring-amber-400/20', text: 'กำลังเริ่ม', cls: 'text-amber-300' },
-      restarting: { dot: 'bg-amber-400 animate-pulse', ring: 'ring-amber-400/20', text: 'ดับ — กำลังเปิดใหม่', cls: 'text-amber-300' },
-      stopping:   { dot: 'bg-amber-400', ring: 'ring-amber-400/20', text: 'กำลังหยุด', cls: 'text-amber-300' },
-      running:    { dot: 'bg-emerald-400', ring: 'ring-emerald-400/20', text: 'ทำงาน', cls: 'text-emerald-400' },
-      unhealthy:  { dot: 'bg-orange-500 animate-pulse', ring: 'ring-orange-500/20', text: 'ไม่ตอบสนอง', cls: 'text-orange-400' },
-      failed:     { dot: 'bg-rose-500', ring: 'ring-rose-500/30', text: 'ดับ (หยุดเปิดใหม่)', cls: 'text-rose-400' },
+    const STATUS_TEXT = {
+      stopped: 'หยุด',
+      starting: 'กำลังเริ่ม',
+      restarting: 'ดับ — กำลังเปิดใหม่',
+      stopping: 'กำลังหยุด',
+      running: 'ทำงาน',
+      unhealthy: 'ไม่ตอบสนอง',
+      failed: 'ดับ (หยุดเปิดใหม่)',
     };
 
-    const btn = (label, cls, action, id) =>
-      `<button data-action="${action}" data-id="${id}" class="px-3 py-1.5 rounded-lg text-[11px] font-bold ${cls}">${label}</button>`;
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const btn = (label, cls, action, id) => `<button data-action="${action}" data-id="${id}" class="${cls}">${label}</button>`;
 
     function renderCards() {
       cardsEl.innerHTML = services.map((s) => `
-        <div class="p-3 bg-slate-800/80 rounded-xl border border-slate-700 flex items-center gap-3">
-          <span id="dot-${s.id}" class="w-3.5 h-3.5 shrink-0 rounded-full ring-4"></span>
-          <div class="flex-1 min-w-0">
-            <div class="text-xs font-bold text-white truncate">${s.name}</div>
-            <div class="text-[11px] text-slate-400 font-mono">
-              Port ${s.port} <span class="text-slate-500">· ${s.id}${s.host === '127.0.0.1' ? ' · ภายในเครื่อง' : ''}</span>
-              <span id="st-${s.id}" class="ml-2"></span>
+        <div id="card-${s.id}" class="card s-stopped">
+          <span class="dot"></span>
+          <div class="info">
+            <div class="name">${esc(s.name)}</div>
+            <div class="meta">
+              Port ${s.port} <span class="dim">· ${s.id}${s.host === '127.0.0.1' ? ' · ภายในเครื่อง' : ''}</span>
+              <span id="st-${s.id}" class="state"></span>
             </div>
           </div>
-          ${btn('▶ Start', 'bg-emerald-600/90 hover:bg-emerald-500 text-white', 'svc-start', s.id)}
-          ${btn('⟳ Restart', 'bg-blue-600/90 hover:bg-blue-500 text-white', 'svc-restart', s.id)}
-          ${btn('■ Stop', 'bg-slate-700 hover:bg-slate-600 text-slate-200', 'svc-stop', s.id)}
+          ${btn('▶ Start', 'green', 'svc-start', s.id)}
+          ${btn('⟳ Restart', 'blue', 'svc-restart', s.id)}
+          ${btn('■ Stop', 'gray', 'svc-stop', s.id)}
         </div>`).join('');
       filterEl.innerHTML = '<option value="">ทุกส่วน</option>' +
-        services.map((s) => `<option value="${s.id}">${s.name}</option>`).join('');
+        services.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
       services.forEach((s) => paint(s.id));
     }
 
     function paint(id) {
       const st = state[id] || { status: 'stopped' };
-      const look = STATUS[st.status] || STATUS.stopped;
-      const dot = document.getElementById(`dot-${id}`);
+      const status = STATUS_TEXT[st.status] ? st.status : 'stopped';
+      const card = document.getElementById(`card-${id}`);
       const label = document.getElementById(`st-${id}`);
-      if (!dot || !label) return;
-      dot.className = `w-3.5 h-3.5 shrink-0 rounded-full ring-4 ${look.dot} ${look.ring}`;
+      if (!card || !label) return;
+      card.className = `card s-${status}`;
       const extra = [st.building ? '🔨 กำลัง build' : '', st.crashes ? `ดับ ${st.crashes} ครั้ง` : ''].filter(Boolean).join(' · ');
-      label.className = `ml-2 font-sans font-bold ${look.cls}`;
-      label.textContent = `● ${look.text}${extra ? ` (${extra})` : ''}`;
+      label.textContent = `● ${STATUS_TEXT[status]}${extra ? ` (${extra})` : ''}`;
 
-      const all = services.map((s) => (state[s.id] || {}).status);
-      const running = all.filter((x) => x === 'running').length;
+      const running = services.filter((s) => (state[s.id] || {}).status === 'running').length;
       if (running === 0) {
-        globalStatus.className = 'text-[11px] font-bold px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700';
+        globalStatus.className = 'pill';
         globalStatus.textContent = '⚪ OFFLINE';
       } else if (running === services.length) {
-        globalStatus.className = 'text-[11px] font-bold px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+        globalStatus.className = 'pill ok';
         globalStatus.textContent = `🟢 RUNNING ${running}/${services.length}`;
       } else {
-        globalStatus.className = 'text-[11px] font-bold px-3 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20';
+        globalStatus.className = 'pill part';
         globalStatus.textContent = `🟡 RUNNING ${running}/${services.length}`;
       }
     }
@@ -122,7 +167,7 @@
     function appendLog({ id, text, level }) {
       const line = document.createElement('div');
       line.dataset.id = String(id).split(':')[0];
-      line.className = level === 'error' ? 'text-rose-400' : 'text-emerald-400';
+      line.className = level === 'error' ? 'error' : 'info';
       line.textContent = `[${id}] ${text}`;
       if (filterEl.value && line.dataset.id !== filterEl.value) line.style.display = 'none';
       const atBottom = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 20;
@@ -139,7 +184,7 @@
     document.getElementById('btn-stop-all').addEventListener('click', () => ipcRenderer.send('stop-all'));
     document.getElementById('btn-open-web').addEventListener('click', () => ipcRenderer.send('open-browser'));
     document.getElementById('btn-clear-log').addEventListener('click', () => {
-      terminal.innerHTML = '<div class="text-slate-500">> Log cleared.</div>';
+      terminal.innerHTML = '<div class="muted">&gt; Log cleared.</div>';
     });
     filterEl.addEventListener('change', () => {
       [...terminal.children].forEach((el) => {
