@@ -4,7 +4,7 @@ import { io } from '../lib/realtime.js';
 import { JWT_SECRET, MES_QUERY_EMP_NO } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
-import { appendRouteLog, appendLoginLog, readRouteLogs } from '../lib/mesLog.js';
+import { appendRouteLog, appendLoginLog, readRouteLogs, readShiftSummary } from '../lib/mesLog.js';
 import { findOperatorExams, checkOperatorQualification } from '../lib/operatorExams.js';
 import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
 
@@ -324,6 +324,22 @@ router.get('/api/mes/logs', authenticateMesOrStaff, async (req, res) => {
   } catch (err) {
     console.error('Read MES Logs Error:', err);
     res.status(500).json({ success: false, message: 'อ่านประวัติไม่สำเร็จ' });
+  }
+});
+
+// ยอด OK / NG ของเครื่องในกะปัจจุบัน (กะเช้า 07:40-19:40 / กะดึก 19:40-07:40 เวลาไทย)
+router.get('/api/mes/shift-summary', authenticateMesOrStaff, async (req, res) => {
+  const terminal = text(req.query.terminal, 100);
+  const end = nextShiftCutoff();
+  const start = new Date(end.getTime() - 12 * 3600000);
+  // กะที่จบ 19:40 = กะเช้า (UTC 12:40)
+  const shift = end.getUTCHours() === 12 ? 'day' : 'night';
+  try {
+    const summary = await readShiftSummary({ terminal, since: start });
+    res.json({ success: true, data: { shift, start: start.toISOString(), end: end.toISOString(), ...summary } });
+  } catch (err) {
+    console.error('Read MES Shift Summary Error:', err);
+    res.status(500).json({ success: false, message: 'อ่านยอดกะนี้ไม่สำเร็จ' });
   }
 });
 

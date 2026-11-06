@@ -95,6 +95,36 @@ export const appendLoginLog = async (entry) => {
   }
 };
 
+// นับยอดส่งสำเร็จของเครื่องตั้งแต่ since (Date) — OK = PASS / INPUT, NG = FAIL — แยกตาม Line / Station
+export const readShiftSummary = async ({ terminal, since }) => {
+  const start = bangkokParts(since);
+  const startKey = `${start.date} ${start.time}`;
+  const dates = [...new Set([start.date, bangkokParts().date])];
+  const byStation = new Map();
+  const total = { ok: 0, ng: 0 };
+  for (const date of dates) {
+    let content;
+    try {
+      content = await fs.readFile(path.join(MES_LOG_DIR, `${date}.csv`), 'utf8');
+    } catch {
+      continue;
+    }
+    const lines = content.replace(/^﻿/, '').split(/\r?\n/).filter(Boolean).slice(1);
+    for (const line of lines) {
+      const cells = parseCsvLine(line);
+      const row = Object.fromEntries(ROUTE_COLUMNS.map((c, idx) => [c, cells[idx] ?? '']));
+      if (row.success !== 'Y' || row.time < startKey) continue;
+      if (terminal && row.terminal !== terminal) continue;
+      const key = `${row.line}|${row.station}`;
+      if (!byStation.has(key)) byStation.set(key, { line: row.line, station: row.station, ok: 0, ng: 0 });
+      const field = row.result === 'FAIL' ? 'ng' : 'ok';
+      byStation.get(key)[field] += 1;
+      total[field] += 1;
+    }
+  }
+  return { total, stations: [...byStation.values()] };
+};
+
 // ประวัติล่าสุดของเครื่อง (อ่านไฟล์วันนี้ + เมื่อวาน) ใหม่สุดก่อน
 export const readRouteLogs = async ({ terminal, limit = 30 }) => {
   const today = bangkokParts().date;

@@ -148,6 +148,8 @@ export default function MesUpdate({ isDarkMode = false }) {
   const [lineInfo, setLineInfo] = useState([]);
   const [moByLine, setMoByLine] = useState({});
   const [logs, setLogs] = useState([]);
+  // ยอดส่งสำเร็จของเครื่องนี้ในกะปัจจุบัน { shift, start, end, total: { ok, ng }, stations: [{ line, station, ok, ng }] }
+  const [shiftSummary, setShiftSummary] = useState(null);
   const [locked, setLocked] = useState(() => new Set(loadJson(MES_LOCKED_KEY, [])));
   const [runtime, setRuntime] = useState({}); // stationId -> { sn, result, status, text }
   // station ที่กด FAIL ไว้: ชิ้นถัดไปส่ง PASS ให้ station ก่อนหน้า แล้วส่ง FAIL ที่ station นี้ และหยุด
@@ -252,10 +254,15 @@ export default function MesUpdate({ isDarkMode = false }) {
   // ---------- โหลดข้อมูล ----------
   const fetchLogs = useCallback(async () => {
     if ((!mesAuthRef.current && !staff) || !terminal) return;
+    const q = `terminal=${encodeURIComponent(terminal)}`;
     try {
-      const res = await fetch(`${API_URL}/mes/logs?limit=30&terminal=${encodeURIComponent(terminal)}`, { headers: readHeaders() });
-      const data = await res.json();
+      const [logRes, sumRes] = await Promise.all([
+        fetch(`${API_URL}/mes/logs?limit=30&${q}`, { headers: readHeaders() }),
+        fetch(`${API_URL}/mes/shift-summary?${q}`, { headers: readHeaders() }),
+      ]);
+      const [data, sum] = await Promise.all([logRes.json(), sumRes.json()]);
       if (data.success) setLogs(data.data);
+      if (sum.success) setShiftSummary(sum.data);
     } catch (err) {
       console.error("Fetch MES logs error:", err);
     }
@@ -291,6 +298,17 @@ export default function MesUpdate({ isDarkMode = false }) {
     if (!canRead) return;
     fetchLogs();
   }, [canRead, fetchLogs]);
+
+  // ขึ้นกะใหม่ (07:40 / 19:40) -> ยอด OK / NG เริ่มนับใหม่
+  useEffect(() => {
+    if (!canRead || !shiftSummary?.end) return;
+    const ms = new Date(shiftSummary.end).getTime() - Date.now() + 2000;
+    const timer = setTimeout(fetchLogs, Math.max(1000, Math.min(ms, 2 ** 31 - 1)));
+    return () => clearTimeout(timer);
+  }, [canRead, shiftSummary?.end, fetchLogs]);
+
+  const shiftCount = (st) =>
+    shiftSummary?.stations?.find((s) => s.line === st.line && s.station === st.station) || { ok: 0, ng: 0 };
 
   // โหลด WO ของทุก Line ที่มี station
   const stationLines = useMemo(() => [...new Set(stations.map((s) => s.line))], [stations]);
@@ -1373,6 +1391,24 @@ export default function MesUpdate({ isDarkMode = false }) {
         </form>
       </div>
 
+      {/* ยอด OK / NG ของกะนี้ (นับเฉพาะที่ส่ง MES สำเร็จ) */}
+      <div className={`rounded-2xl border p-4 flex flex-wrap items-center gap-3 ${card}`}>
+        <div className="mr-auto">
+          <div className={`text-sm font-bold ${textMain}`}>
+            ยอดส่ง {shiftSummary?.shift === "night" ? "กะดึก (19:40 - 07:40)" : shiftSummary?.shift === "day" ? "กะเช้า (07:40 - 19:40)" : "กะนี้"}
+          </div>
+          <div className="text-[11px] text-gray-400">นับเฉพาะที่ส่ง MES สำเร็จของเครื่องนี้ — ขึ้นกะใหม่เริ่มนับใหม่</div>
+        </div>
+        <div className="px-6 py-2 rounded-xl bg-emerald-600 text-white text-center min-w-[110px]">
+          <div className="text-[11px] font-bold opacity-80">OK</div>
+          <div className="text-3xl font-black leading-tight">{shiftSummary?.total?.ok ?? "-"}</div>
+        </div>
+        <div className="px-6 py-2 rounded-xl bg-rose-600 text-white text-center min-w-[110px]">
+          <div className="text-[11px] font-bold opacity-80">NG</div>
+          <div className="text-3xl font-black leading-tight">{shiftSummary?.total?.ng ?? "-"}</div>
+        </div>
+      </div>
+
       {stations.length === 0 ? (
         <div className={`rounded-2xl border p-10 text-center text-xs text-gray-400 ${card}`}>
           เครื่องนี้ยังไม่มี station — ให้ ME / Admin กด "⚙ ตั้งค่า" เพื่อเพิ่ม
@@ -1400,6 +1436,10 @@ export default function MesUpdate({ isDarkMode = false }) {
                     <div className="text-[11px] text-gray-400 truncate">
                       <span className="text-blue-400 font-semibold">{st.line}</span> · {st.station}
                       {isInputMode(st) && <span className="text-amber-500 font-semibold"> · INPUT</span>}
+                    </div>
+                    <div className="flex gap-1 mt-1 text-[10px] font-black" title="ยอดส่งสำเร็จของ station นี้ในกะนี้">
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-600/15 text-emerald-500">OK {shiftCount(st).ok}</span>
+                      <span className="px-2 py-0.5 rounded-md bg-rose-600/15 text-rose-500">NG {shiftCount(st).ng}</span>
                     </div>
                   </div>
                 </div>
