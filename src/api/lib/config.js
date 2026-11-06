@@ -27,6 +27,12 @@ export const MES_API_BASE = (process.env.MES_API_BASE || 'http://10.204.212.22:5
 // รหัสพนักงานที่ใช้ "ดู" Line / Station / WO จาก MES (lineinfo, molist) — ไม่ใช่คนที่ login
 // (routing-update ยังใช้รหัสของ operator ที่ login)
 export const MES_QUERY_EMP_NO = String(process.env.MES_QUERY_EMP_NO || '86727533').trim();
+// 📦 WMS (ข้อมูล Work Order / Progress) — login ที่ WMS_AUTH_BASE ด้วยบัญชีใน .env แล้วเรียก WMS_API_BASE
+// 🛡️ WMS_API_USER / WMS_API_PASSWORD ต้องตั้งใน .env เท่านั้น ห้ามเขียนในโค้ด
+export const WMS_AUTH_BASE = (process.env.WMS_AUTH_BASE || 'http://10.204.212.28:15000').replace(/\/+$/, '');
+export const WMS_API_BASE = (process.env.WMS_API_BASE || 'http://10.204.212.28:5207').replace(/\/+$/, '');
+export const WMS_API_USER = process.env.WMS_API_USER || '';
+export const WMS_API_PASSWORD = process.env.WMS_API_PASSWORD || '';
 // ประวัติการส่ง MES เก็บเป็นไฟล์ CSV ที่นี่ (ไม่ใช้ Database)
 export const MES_LOG_DIR = path.resolve(process.env.MES_LOG_DIR || 'D:/MES logs');
 // path ของ input-update (station แบบ input) — ถ้า MES ใช้ path อื่น เปลี่ยนได้ใน .env

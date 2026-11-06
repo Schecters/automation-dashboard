@@ -6,6 +6,7 @@ import { getClientIp } from '../lib/clientIp.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs, readShiftSummary } from '../lib/mesLog.js';
 import { findOperatorExams, checkOperatorQualification } from '../lib/operatorExams.js';
+import { getWorkOrderProgress, WmsError } from '../lib/wmsClient.js';
 import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -324,6 +325,17 @@ router.get('/api/mes/logs', authenticateMesOrStaff, async (req, res) => {
   } catch (err) {
     console.error('Read MES Logs Error:', err);
     res.status(500).json({ success: false, message: 'อ่านประวัติไม่สำเร็จ' });
+  }
+});
+
+// ความคืบหน้าของ WO จาก WMS (Output / Target) — server login WMS เองด้วยบัญชีใน .env
+router.get('/api/mes/wo-progress', authenticateMesOrStaff, async (req, res) => {
+  const mo = text(req.query.mo, 50);
+  if (!/^[A-Za-z0-9_-]+$/.test(mo)) return res.status(400).json({ success: false, message: 'เลข WO ไม่ถูกต้อง' });
+  try {
+    res.json({ success: true, data: await getWorkOrderProgress(mo) });
+  } catch (err) {
+    res.status(err instanceof WmsError ? err.status : 500).json({ success: false, message: err.message });
   }
 });
 
