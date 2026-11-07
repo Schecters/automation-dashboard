@@ -110,6 +110,35 @@ router.put('/api/defect-codes/:id', authenticateToken, requireRoles(...EDIT_ROLE
   }
 });
 
+// คัดลอกอาการ (ทั้งหมด หรือเฉพาะ ids) จาก Station หนึ่ง ไปหลาย Station — รหัสที่ปลายทางมีอยู่แล้วข้าม (ไม่ทับ)
+router.post('/api/defect-codes/copy', authenticateToken, requireRoles(...EDIT_ROLES), async (req, res) => {
+  const from = clean(req.body?.from_station, 100);
+  const targets = [...new Set((Array.isArray(req.body?.to_stations) ? req.body.to_stations : []).map((s) => clean(s, 100)))]
+    .filter((s) => s && s !== from)
+    .slice(0, 200);
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : null;
+  if (!from || targets.length === 0) {
+    return res.status(400).json({ success: false, message: 'เลือก Station ต้นทาง และ Station ปลายทางอย่างน้อย 1 Station' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO automation_lines.defect_codes (station_name, defect_code, description, is_active, created_by)
+       SELECT t.station, c.defect_code, c.description, c.is_active, $3
+         FROM automation_lines.defect_codes c
+        CROSS JOIN UNNEST($2::text[]) AS t(station)
+        WHERE c.station_name = $1 AND ($4::int[] IS NULL OR c.id = ANY($4::int[]))
+       ON CONFLICT (station_name, defect_code) DO NOTHING
+       RETURNING station_name`,
+      [from, targets, req.user.employee_id, ids]
+    );
+    audit(req, 'COPY_DEFECT_CODE', `${from} -> ${targets.join(', ')} (${rows.length} รายการ)`);
+    res.json({ success: true, inserted: rows.length, stations: targets.length });
+  } catch (err) {
+    console.error('Copy defect codes error:', err);
+    res.status(500).json({ success: false, message: 'คัดลอกไม่สำเร็จ' });
+  }
+});
+
 router.delete('/api/defect-codes/:id', authenticateToken, requireRoles(...EDIT_ROLES), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: 'id ไม่ถูกต้อง' });

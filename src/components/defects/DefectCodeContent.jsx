@@ -24,6 +24,9 @@ export default function DefectCodeContent({ isDarkMode = false, userRole = "" })
   const [form, setForm] = useState(EMPTY_FORM);
   const [message, setMessage] = useState(null);
   const [saving, setSaving] = useState(false);
+  // คัดลอกไป Station อื่น: เลือกแถว (ไม่เลือก = ทั้งหมด) + Station ปลายทางหลายตัว
+  const [selected, setSelected] = useState(() => new Set());
+  const [copy, setCopy] = useState(null); // { line, search, targets: Set, manual }
 
   const loadCodes = useCallback(async () => {
     try {
@@ -74,6 +77,60 @@ export default function DefectCodeContent({ isDarkMode = false, userRole = "" })
     setStation(name);
     setForm(EMPTY_FORM);
     setMessage(null);
+    setSelected(new Set());
+    setCopy(null);
+  };
+
+  const toggleSelected = (id) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  // Station ปลายทางที่เลือกได้ (จาก MES + ที่มีอาการอยู่แล้ว) ไม่รวม Station ต้นทาง
+  const copyCandidates = useMemo(() => {
+    if (!copy) return [];
+    const fromMes = mesStations.filter((s) => !copy.line || s.line === copy.line).map((s) => s.station);
+    const extra = copy.line ? [] : Object.keys(countByStation);
+    const q = copy.search.trim().toLowerCase();
+    return [...new Set([...fromMes, ...extra])].filter((s) => s !== station && (!q || s.toLowerCase().includes(q))).sort();
+  }, [copy, mesStations, countByStation, station]);
+
+  const toggleTarget = (name) =>
+    setCopy((prev) => {
+      const targets = new Set(prev.targets);
+      if (targets.has(name)) targets.delete(name);
+      else targets.add(name);
+      return { ...prev, targets };
+    });
+
+  const doCopy = async () => {
+    const targets = [...copy.targets];
+    if (targets.length === 0) return;
+    const ids = selected.size > 0 ? [...selected] : null;
+    const count = ids ? ids.length : stationCodes.length;
+    if (!window.confirm(`คัดลอก ${count} อาการ จาก ${station} ไป ${targets.length} Station:\n${targets.join(", ")}\n\n(รหัสที่ปลายทางมีอยู่แล้วจะข้าม ไม่ทับของเดิม)`)) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/defect-codes/copy`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ from_station: station, to_stations: targets, ids }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data.success) throw new Error(data.message || `HTTP ${res.status}`);
+      const skipped = count * targets.length - data.inserted;
+      setMessage({ type: "ok", text: `คัดลอกแล้ว ${data.inserted} รายการ ไป ${targets.length} Station${skipped > 0 ? ` (ข้าม ${skipped} รายการที่มีอยู่แล้ว)` : ""}` });
+      setCopy(null);
+      setSelected(new Set());
+      loadCodes();
+    } catch (err) {
+      setMessage({ type: "error", text: `คัดลอกไม่สำเร็จ: ${err.message}` });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const save = async (e) => {
@@ -197,9 +254,66 @@ export default function DefectCodeContent({ isDarkMode = false, userRole = "" })
             <div className="text-sm text-gray-400 py-10 text-center">เลือก Station ทางซ้าย</div>
           ) : (
             <>
-              <div className={`text-lg font-black ${textMain}`}>
-                อาการเสียของ Station <span className="text-blue-500">{station}</span>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className={`text-lg font-black ${textMain}`}>
+                  อาการเสียของ Station <span className="text-blue-500">{station}</span>
+                </div>
+                {canEdit && stationCodes.length > 0 && !copy && (
+                  <button type="button" className={btnGhost}
+                    onClick={() => setCopy({ line: lineFilter, search: "", targets: new Set(), manual: "" })}>
+                    ⧉ คัดลอกไป Station อื่น {selected.size > 0 ? `(${selected.size} ที่เลือก)` : "(ทั้งหมด)"}
+                  </button>
+                )}
               </div>
+
+              {copy && (
+                <div className={`rounded-xl border-2 border-dashed border-blue-500/50 p-3 space-y-2 ${isDarkMode ? "bg-slate-900/40" : "bg-blue-50/40"}`}>
+                  <div className={`text-sm font-bold ${textMain}`}>
+                    คัดลอก {selected.size > 0 ? `${selected.size} อาการที่เลือก` : `ทั้งหมด ${stationCodes.length} อาการ`} ไปที่ Station
+                    <span className="text-xs font-normal text-gray-400"> — ติ๊กเลือกแถวในตารางด้านล่างถ้าต้องการบางอาการ / รหัสที่ปลายทางมีอยู่แล้วจะข้าม</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <select className={`${input} w-32`} value={copy.line} onChange={(e) => setCopy({ ...copy, line: e.target.value })}>
+                      <option value="">ทุก Line</option>
+                      {lines.map((l) => <option key={l} value={l}>{l}</option>)}
+                    </select>
+                    <input className={`${input} flex-1 min-w-[160px]`} placeholder="ค้นหา Station" value={copy.search}
+                      onChange={(e) => setCopy({ ...copy, search: e.target.value })} />
+                    <button type="button" className={btnGhost}
+                      onClick={() => setCopy({ ...copy, targets: new Set([...copy.targets, ...copyCandidates]) })}>เลือกทั้งหมดที่แสดง</button>
+                    <button type="button" className={btnGhost} onClick={() => setCopy({ ...copy, targets: new Set() })}>ล้าง</button>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-1">
+                    {copyCandidates.map((s) => (
+                      <label key={s} className={`flex items-center gap-2 px-2 py-1 rounded-lg text-xs cursor-pointer ${textMain} ${
+                        copy.targets.has(s) ? "bg-blue-600/15 font-bold" : isDarkMode ? "hover:bg-slate-800" : "hover:bg-gray-100"
+                      }`}>
+                        <input type="checkbox" checked={copy.targets.has(s)} onChange={() => toggleTarget(s)} />
+                        <span className="truncate">{s}</span>
+                        {countByStation[s] > 0 && <span className="text-[10px] text-rose-500">({countByStation[s]})</span>}
+                      </label>
+                    ))}
+                    {copyCandidates.length === 0 && <div className="text-xs text-gray-400">ไม่พบ Station</div>}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input className={`${input} w-56`} placeholder="หรือพิมพ์ชื่อ Station เอง" value={copy.manual}
+                      onChange={(e) => setCopy({ ...copy, manual: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && copy.manual.trim()) {
+                          e.preventDefault();
+                          setCopy({ ...copy, manual: "", targets: new Set([...copy.targets, copy.manual.trim()]) });
+                        }
+                      }} />
+                    <div className="flex-1 text-xs text-gray-400 truncate">
+                      ปลายทาง {copy.targets.size} Station{copy.targets.size > 0 ? `: ${[...copy.targets].join(", ")}` : ""}
+                    </div>
+                    <button type="button" className={btnGhost} onClick={() => setCopy(null)}>ยกเลิก</button>
+                    <button type="button" className={btnPrimary} disabled={saving || copy.targets.size === 0} onClick={doCopy}>
+                      คัดลอก
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {canEdit && (
                 <form onSubmit={save} className="flex flex-wrap items-end gap-2">
@@ -222,6 +336,13 @@ export default function DefectCodeContent({ isDarkMode = false, userRole = "" })
                 <table className="w-full text-sm">
                   <thead className="text-gray-400 text-left text-xs">
                     <tr>
+                      {canEdit && (
+                        <th className="px-3 py-2 w-8">
+                          <input type="checkbox" title="เลือกทั้งหมด (สำหรับคัดลอก)"
+                            checked={stationCodes.length > 0 && stationCodes.every((c) => selected.has(c.id))}
+                            onChange={(e) => setSelected(e.target.checked ? new Set(stationCodes.map((c) => c.id)) : new Set())} />
+                        </th>
+                      )}
                       <th className="px-3 py-2">รหัส</th>
                       <th className="px-3 py-2">อาการ</th>
                       <th className="px-3 py-2">สถานะ</th>
@@ -231,6 +352,11 @@ export default function DefectCodeContent({ isDarkMode = false, userRole = "" })
                   <tbody>
                     {stationCodes.map((c) => (
                       <tr key={c.id} className={`border-t ${isDarkMode ? "border-slate-700/60" : "border-gray-100"} ${c.is_active ? "" : "opacity-50"}`}>
+                        {canEdit && (
+                          <td className="px-3 py-2">
+                            <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelected(c.id)} />
+                          </td>
+                        )}
                         <td className={`px-3 py-2 font-mono font-bold ${textMain}`}>{c.defect_code}</td>
                         <td className={`px-3 py-2 ${textMain}`}>{c.description}</td>
                         <td className="px-3 py-2">
@@ -249,7 +375,7 @@ export default function DefectCodeContent({ isDarkMode = false, userRole = "" })
                       </tr>
                     ))}
                     {stationCodes.length === 0 && (
-                      <tr><td colSpan={4} className="px-3 py-6 text-center text-gray-400 text-xs">ยังไม่มีอาการเสียของ Station นี้</td></tr>
+                      <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-400 text-xs">ยังไม่มีอาการเสียของ Station นี้</td></tr>
                     )}
                   </tbody>
                 </table>
