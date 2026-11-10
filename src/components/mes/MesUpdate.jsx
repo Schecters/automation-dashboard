@@ -154,13 +154,19 @@ export default function MesUpdate({ isDarkMode = false }) {
   // ยอดส่งสำเร็จของเครื่องนี้ในกะปัจจุบัน { shift, start, end, total: { ok, ng }, stations: [{ line, station, ok, ng }] }
   const [shiftSummary, setShiftSummary] = useState(null);
   // WO เดียวใช้กับทุก station { line, mo, model } — ครั้งแรกใช้ WO ที่เคยเลือกไว้ใน station (รุ่นก่อนเลือกแยกต่อ station)
-  const [wo, setWoState] = useState(() => {
+  const [savedWo, setWoState] = useState(() => {
     const saved = loadJson(MES_WO_KEY, null);
     if (saved?.mo) return saved;
     const old = loadJson(MES_STATIONS_KEY, []).find((s) => s.mo);
     return old ? { line: old.line, mo: String(old.mo), model: old.model_name || "" } : null;
   });
-  const [woLine, setWoLine] = useState(() => wo?.line || "");
+  const [woLineSel, setWoLine] = useState(() => savedWo?.line || "");
+  // Line ของ station ทั้งหมดในเครื่องนี้
+  const stationLines = useMemo(() => [...new Set(stations.map((s) => s.line).filter(Boolean))], [stations]);
+  // Line ที่ใช้เลือก WO: Line ที่เลือกไว้ต้องยังมี station อยู่ ไม่งั้นใช้ Line แรก (เปลี่ยน station ไป Line ใหม่ = ตาม Line ใหม่)
+  const woLine = stationLines.includes(woLineSel) ? woLineSel : stationLines[0] || "";
+  // WO ที่จำไว้ใช้ได้เฉพาะเมื่อเป็นของ Line ที่เลือกอยู่ (WO ของ Line เดิมไม่ค้างมาส่งกับ Line ใหม่)
+  const wo = savedWo?.mo && (!savedWo.line || !woLine || savedWo.line === woLine) ? savedWo : null;
   const [woProgress, setWoProgress] = useState(null); // { data, error, loading, at }
   const [locked, setLocked] = useState(() => new Set(loadJson(MES_LOCKED_KEY, [])));
   const [runtime, setRuntime] = useState({}); // stationId -> { sn, result, status, text }
@@ -326,18 +332,12 @@ export default function MesUpdate({ isDarkMode = false }) {
     shiftSummary?.stations?.find((s) => s.line === st.line && s.station === st.station) || { ok: 0, ng: 0 };
 
   // โหลด WO ของทุก Line ที่มี station
-  const stationLines = useMemo(() => [...new Set(stations.map((s) => s.line).filter(Boolean))], [stations]);
   useEffect(() => {
     if (!canRead) return;
     stationLines.forEach((line) => {
       if (!moByLine[line]) fetchMoList(line);
     });
   }, [canRead, stationLines, moByLine, fetchMoList]);
-
-  // Line ที่ใช้เลือก WO: ถ้าเครื่องนี้มี Line เดียว เลือกให้เลย
-  useEffect(() => {
-    if (!woLine && stationLines.length > 0) setWoLine(stationLines[0]);
-  }, [woLine, stationLines]);
 
   // ---------- WO (เลือกครั้งเดียว ใช้ทุก station) + Progress จาก WMS ----------
   const setWo = (next) => {
