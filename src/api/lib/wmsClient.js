@@ -103,17 +103,25 @@ const findInTree = (nodes, mo) => {
 };
 
 // ความคืบหน้าของ WO (ส่งเฉพาะที่หน้าเว็บใช้ ไม่ส่งรายการวัตถุดิบ)
-//  ใช้ /workorder/<WO>/detail ก่อน ถ้าใช้ไม่ได้ (เช่น 10/11/2026 WMS ตอบ 404 "...403" ทุก WO)
-//  -> ใช้ /workorder/tree/<WO> แทน (มี target / input / output / fail / scrap แต่ไม่มี line และวันที่)
+//  ใช้ /workorder/tree/<WO> เป็นหลัก (target / input / output / fail / scrap — ไม่มี line และวันที่)
+//  ไม่พบ WO ใน tree -> ลอง /workorder/<WO>/detail
+//  (10/11/2026 /detail ตอบ 404 "...403" ทุก WO เป็นปัญหาฝั่ง WMS จึงเปลี่ยนมาใช้ tree)
 export const getWorkOrderProgress = async (mo) => {
-  let d;
+  const path = encodeURIComponent(mo);
+  let d = null;
+  let treeErr = null;
   try {
-    d = await wmsGet(`/workorder/${encodeURIComponent(mo)}/detail`);
+    d = findInTree((await wmsGet(`/workorder/tree/${path}`))?.data, mo);
   } catch (err) {
     if (!(err instanceof WmsError) || err.status === 503) throw err; // ยังไม่ตั้งบัญชี / login ไม่ได้ -> ไม่ต้องลองอีกทาง
-    const tree = await wmsGet(`/workorder/tree/${encodeURIComponent(mo)}`).catch(() => null);
-    d = findInTree(tree?.data, mo);
-    if (!d) throw err;
+    treeErr = err;
+  }
+  if (!d) {
+    try {
+      d = await wmsGet(`/workorder/${path}/detail`);
+    } catch (err) {
+      throw treeErr && err.status === 404 && !/WorkOrder not found/i.test(err.message) ? treeErr : err;
+    }
   }
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   return {
