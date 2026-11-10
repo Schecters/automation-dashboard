@@ -92,9 +92,29 @@ export const wmsGet = async (pathAndQuery) => {
   throw new WmsError('WMS ไม่ยอมรับ token (login ใหม่แล้วยังได้ 401)');
 };
 
+// หา WO ใน tree (WO หลัก + WO ลูก)
+const findInTree = (nodes, mo) => {
+  for (const n of Array.isArray(nodes) ? nodes : []) {
+    if (String(n.moNumber) === String(mo)) return n;
+    const found = findInTree(n.children, mo);
+    if (found) return found;
+  }
+  return null;
+};
+
 // ความคืบหน้าของ WO (ส่งเฉพาะที่หน้าเว็บใช้ ไม่ส่งรายการวัตถุดิบ)
+//  ใช้ /workorder/<WO>/detail ก่อน ถ้าใช้ไม่ได้ (เช่น 10/11/2026 WMS ตอบ 404 "...403" ทุก WO)
+//  -> ใช้ /workorder/tree/<WO> แทน (มี target / input / output / fail / scrap แต่ไม่มี line และวันที่)
 export const getWorkOrderProgress = async (mo) => {
-  const d = await wmsGet(`/workorder/${encodeURIComponent(mo)}/detail`);
+  let d;
+  try {
+    d = await wmsGet(`/workorder/${encodeURIComponent(mo)}/detail`);
+  } catch (err) {
+    if (!(err instanceof WmsError) || err.status === 503) throw err; // ยังไม่ตั้งบัญชี / login ไม่ได้ -> ไม่ต้องลองอีกทาง
+    const tree = await wmsGet(`/workorder/tree/${encodeURIComponent(mo)}`).catch(() => null);
+    d = findInTree(tree?.data, mo);
+    if (!d) throw err;
+  }
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   return {
     mo: String(d.moNumber || mo),
