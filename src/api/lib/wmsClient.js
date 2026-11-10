@@ -80,8 +80,13 @@ export const wmsGet = async (pathAndQuery) => {
       cached = null; // token ใช้ไม่ได้แล้ว (หมดอายุ / ถูกยกเลิก)
       continue;
     }
-    if (res.status === 404) throw new WmsError('ไม่พบข้อมูลใน WMS', 404);
-    if (!res.ok) throw new WmsError(`WMS ตอบ HTTP ${res.status}`);
+    if (!res.ok) {
+      // แนบข้อความจาก WMS ด้วย (เช่น WMS ตอบ 404 แต่ข้างในคือ "...status code ... 403" = ระบบหลังบ้านของ WMS ปฏิเสธ ไม่ใช่ไม่มี WO)
+      const body = await res.json().catch(() => null);
+      const detail = body?.message ? ` — ${String(body.message).slice(0, 200)}` : '';
+      if (res.status === 404 && !/status code/i.test(detail)) throw new WmsError(`ไม่พบข้อมูลใน WMS${detail}`, 404);
+      throw new WmsError(`WMS ตอบ HTTP ${res.status}${detail}`, 502);
+    }
     return res.json();
   }
   throw new WmsError('WMS ไม่ยอมรับ token (login ใหม่แล้วยังได้ 401)');
