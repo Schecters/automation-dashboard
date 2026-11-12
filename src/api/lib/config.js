@@ -36,6 +36,8 @@ export const WMS_API_PASSWORD = process.env.WMS_API_PASSWORD || '';
 // ประวัติการส่ง MES เก็บเป็นไฟล์ CSV ที่นี่ (ไม่ใช้ Database)
 export const MES_LOG_DIR = path.resolve(process.env.MES_LOG_DIR || 'D:/MES logs');
 // path ของ input-update (station แบบ input) — ถ้า MES ใช้ path อื่น เปลี่ยนได้ใน .env
+// path ของ routing-input (ส่ง FAIL / งานเสีย — ส่งผลทดสอบ + check-in SN ในครั้งเดียว)
+export const MES_ROUTING_INPUT_PATH = '/' + String(process.env.MES_ROUTING_INPUT_PATH || 'api/mes/tdc/typed/routing-input').trim().replace(/^\/+/, '');
 export const MES_INPUT_UPDATE_PATH = '/' + String(process.env.MES_INPUT_UPDATE_PATH || 'api/mes/tdc/input-update').trim().replace(/^\/+/, '');
 
 // ==========================================

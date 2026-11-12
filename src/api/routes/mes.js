@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { io } from '../lib/realtime.js';
 import { JWT_SECRET, MES_QUERY_EMP_NO } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
-import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, buildDefectTestData, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
+import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, buildDefectTestData, buildRoutingInputPayload, routingInput, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { internalFetch, InternalServiceError } from '../lib/internalKey.js';
 import { appendRouteLog, appendLoginLog, readRouteLogs, readShiftSummary } from '../lib/mesLog.js';
 import { findOperatorExams, checkOperatorQualification } from '../lib/operatorExams.js';
@@ -262,7 +262,6 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
       mode === 'input'
         ? buildInputPayload({ ...fields, barcodePrefix: req.body?.barcode_prefix, barcodeLength: req.body?.barcode_length })
         : null;
-    const row = inputPayload ? JSON.stringify(inputPayload) : buildRoutingRow({ ...fields, result });
 
     // งานเสีย: อ่านอาการจาก Defect Code (ต้องเป็นของ Station นี้และยังเปิดใช้งาน)
     let defect = null;
@@ -278,6 +277,19 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
       }
       testData = buildDefectTestData({ sn, defectCode: defect.defect_code, description: defect.description, empNo });
     }
+    // FAIL (งานเสีย) ส่งที่ routing-input (MES check-in SN เอง ไม่ต้อง routing-check) / PASS ใช้ routing-check -> routing-update เหมือนเดิม
+    const failPayload =
+      mode === 'routing' && result === 'FAIL'
+        ? buildRoutingInputPayload({
+            ...fields,
+            result,
+            errorCode: defect?.defect_code || '',
+            barcodePrefix: req.body?.barcode_prefix,
+            barcodeLength: req.body?.barcode_length,
+            testData,
+          })
+        : null;
+    const row = inputPayload || failPayload ? JSON.stringify(inputPayload || failPayload) : buildRoutingRow({ ...fields, result });
 
     let success = false;
     let responseText = '';
@@ -289,6 +301,12 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
         success = true;
         responseText = `INPUT: ${mesRes.text}`;
         message = 'Input สำเร็จ';
+        lastSent.set(key, { sn, result });
+      } else if (failPayload) {
+        const mesRes = await routingInput(failPayload);
+        success = true;
+        responseText = `ROUTING-INPUT: ${mesRes.text}`;
+        message = defect ? `ส่งงานเสียสำเร็จ (${defect.defect_code} ${defect.description})` : 'ส่ง FAIL สำเร็จ';
         lastSent.set(key, { sn, result });
       } else {
         // 1) routing-check ก่อน (check-in SN ที่ station) — ไม่ OK ไม่ต้อง update
@@ -323,7 +341,7 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
       sn,
       result,
       success,
-      mes_response: `${row}${testData ? ` | testData ${testData}` : ''} => ${responseText}`.slice(0, 2000),
+      mes_response: `${row}${testData && !failPayload ? ` | testData ${testData}` : ''} => ${responseText}`.slice(0, 2000),
     });
     io.emit('mes_updated', { terminal, success });
 

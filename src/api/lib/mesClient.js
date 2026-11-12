@@ -1,4 +1,4 @@
-import { MES_API_BASE, MES_INPUT_UPDATE_PATH } from './config.js';
+import { MES_API_BASE, MES_INPUT_UPDATE_PATH, MES_ROUTING_INPUT_PATH } from './config.js';
 
 // ==========================================
 // 🏭 เรียก MES API (http://10.204.212.22:5207)
@@ -8,6 +8,8 @@ import { MES_API_BASE, MES_INPUT_UPDATE_PATH } from './config.js';
 //                     { routingData: ["SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1"], testData: "" }
 //                     งานเสีย: FAIL + testData "[SN/FAIL];[CODE/อาการ];[EMPNO]"
 //  - input-update   : POST MES_INPUT_UPDATE_PATH (default /api/mes/tdc/input-update)
+//  - routing-input  : POST MES_ROUTING_INPUT_PATH (default /api/mes/tdc/typed/routing-input) — ใช้ส่ง FAIL / งานเสีย
+//                     { sn, mo, model, line, section, group, station, errorCode, result, employeeId, barcodePrefix, barcodeLength, ..., testData }
 // ==========================================
 
 const MES_TIMEOUT_MS = 10000;
@@ -126,6 +128,49 @@ export const routingUpdate = async (rows, testData = '') => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+  return { ...result, payload };
+};
+
+// routing-input: ส่งผล FAIL (งานเสีย) — MES check-in SN ที่ station เองในครั้งเดียว ไม่ต้อง routing-check ก่อน
+//  errorCode = รหัสอาการ (ไม่เกิน 200 ตัว, หลายรหัสคั่นด้วย ";") / testData = buildDefectTestData
+//  สำเร็จ: HTTP 200 (RESULT=0 / OK) / ไม่สำเร็จ: HTTP 400 (RESULT=1 / FAIL) -> MesError
+export const buildRoutingInputPayload = ({
+  sn, mo, model, line, section, group, station, empNo, result = 'FAIL', errorCode = '', barcodePrefix, barcodeLength, testData = '',
+}) => ({
+  sn: cleanField(sn),
+  mo: cleanField(mo),
+  model: cleanField(model),
+  line: cleanField(line),
+  section: cleanField(section),
+  group: cleanField(group),
+  station: cleanField(station),
+  errorCode: cleanField(errorCode).slice(0, 200),
+  result: ROUTING_RESULTS.includes(result) ? result : 'FAIL',
+  employeeId: cleanField(empNo),
+  barcodePrefix: cleanField(barcodePrefix),
+  barcodeLength: Math.max(0, Math.floor(Number(barcodeLength) || 0)),
+  machineNo: '',
+  testSubProgram: '',
+  testSubVersion: '',
+  carrier: '',
+  machineFixture: '',
+  machineConsumables: '',
+  errorPositions: '',
+  testData: String(testData || ''),
+});
+
+export const routingInput = async (payload) => {
+  const result = await mesFetch(MES_ROUTING_INPUT_PATH, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = result.body && typeof result.body === 'object' ? result.body : null;
+  const r = String(body?.RESULT ?? body?.result ?? '').toUpperCase();
+  // HTTP 200 แต่ข้างในบอก FAIL / 1 = ไม่สำเร็จ
+  if (r === '1' || r === 'FAIL') {
+    throw new MesError(`MES ไม่รับ: ${body?.DESCRIPTION || body?.description || body?.message || result.text}`, 400, result.body);
+  }
   return { ...result, payload };
 };
 

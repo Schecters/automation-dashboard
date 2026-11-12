@@ -153,8 +153,10 @@ git push
     (OK = PASS/INPUT, NG = FAIL) แสดงเป็นกล่องใหญ่ข้างปุ่ม Lock ของแต่ละ station: `GET /api/mes/shift-summary?terminal=` (`readShiftSummary`)
   - **งานเสีย**: ปุ่ม "✖ งานเสีย" ในแถว station ที่ Lock → popup สแกน SN (ผลสแกนจาก Modbus/TCP/ช่องพิมพ์เข้า popup แทนการส่งปกติ `routeScan`)
     + dropdown อาการ (`GET /api/mes/defect-codes?station=`) → ส่ง station ที่ Lock ก่อนหน้าให้ผ่าน (PASS / INPUT) ก่อน แล้วส่ง FAIL ที่ station นั้นแล้วหยุด
-    (station ก่อนหน้าไม่ผ่าน = ไม่ส่ง FAIL / station แบบ input ที่เป็นจุดเสีย ส่ง FAIL แบบ routing เหมือน station อื่น)
-    `update-route` รับ `defect_id` → testData `[SN/FAIL];[รหัสอาการ/อาการ];[รหัสพนักงาน]` (`buildDefectTestData`) + บันทึก `defect_logs`
+    (station ก่อนหน้าไม่ผ่าน = ไม่ส่ง FAIL / station แบบ input ที่เป็นจุดเสีย ส่ง FAIL แบบเดียวกับ station อื่น)
+    `update-route` รับ `defect_id` → FAIL ส่งที่ **routing-input** (`MES_ROUTING_INPUT_PATH`, default `/api/mes/tdc/typed/routing-input`, ไม่ต้อง routing-check)
+    JSON `{ sn, mo, model, line, section, group, station, errorCode: รหัสอาการ, result: "FAIL", employeeId, barcodePrefix, barcodeLength, ..., testData }` (`buildRoutingInputPayload`)
+    testData `[SN/FAIL];[รหัสอาการ/อาการ];[รหัสพนักงาน]` (`buildDefectTestData`) + บันทึก `defect_logs` / PASS ยังใช้ routing-check → routing-update เหมือนเดิม
   - **Defect Code / Defect History** (แท็บใน Home): `src/api/routes/defects.js` อยู่ใน service data (5000) ตาราง `automation_lines.defect_codes`
     (station_name = ชื่อ Station ของ MES, defect_code, description, is_active) และ `automation_lines.defect_logs` / แก้อาการได้: admin, me, q
     service อื่นเรียก `/internal/defect-codes`, `/internal/defect-logs` ด้วย `internalFetch` (`lib/internalKey.js` — เฉพาะ 127.0.0.1 + key จาก JWT_SECRET)
