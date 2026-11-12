@@ -398,7 +398,7 @@ export default function MesUpdate({ isDarkMode = false }) {
   const setStationRuntime = (id, patch) => setRuntime((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
 
   // defect = { stationId, defectId, code, description } -> งานเสีย: ส่ง station ที่ Lock ก่อนหน้าให้ผ่านก่อน
-  //   แล้วส่ง FAIL + อาการที่ station นั้น และหยุด (station ก่อนหน้าไม่ผ่าน = ไม่ส่ง FAIL)
+  //   แล้วส่ง FAIL + อาการที่ station นั้น และหยุด (station ก่อนหน้าไม่ผ่าน ก็ส่งต่อจนถึง FAIL เสมอ)
   const processScan = useCallback(
     async (rawSn, source, defect = null) => {
       // SN ตามที่สแกนได้ทั้งหมด (บาง model มีช่องว่าง เช่น "... Y" ห้ามตัด) ตัดแค่ Enter และ "}"
@@ -436,7 +436,9 @@ export default function MesUpdate({ isDarkMode = false }) {
       let allOk = true;
       let sentPass = false; // มี station ที่ส่ง PASS / INPUT สำเร็จจริง (ไม่นับที่ข้ามเพราะซ้ำ)
       const { delay_sec: delaySec, continue_on_error: sendOptContinue } = sendOptionsRef.current;
-      const continueOnError = sendOptContinue && !defect; // งานเสีย: station ก่อนหน้าต้องผ่านก่อน
+      // งานเสีย: station ก่อนหน้าไม่ผ่าน ก็ส่งต่อจนถึง station ที่เสียเสมอ (ไม่ขึ้นกับตั้งค่า)
+      const continueOnError = defect ? true : sendOptContinue;
+      let defectSent = false; // งานเสีย: ส่ง FAIL ที่ station ที่เสียสำเร็จ
       let calledMes = false; // station ก่อนหน้าเรียก MES จริง (ไม่ใช่ข้ามเพราะซ้ำ) -> ต้องรอ delay ก่อนส่ง station ถัดไป
       try {
         for (let i = 0; i < targets.length; i++) {
@@ -501,13 +503,14 @@ export default function MesUpdate({ isDarkMode = false }) {
               setStationRuntime(r.id, {
                 sn,
                 status: "stopped",
-                text: defect ? "ไม่ได้ส่งงานเสีย (station ก่อนหน้าไม่ผ่าน)" : "ไม่ได้ส่ง (station ก่อนหน้าไม่สำเร็จ)",
+                text: "ไม่ได้ส่ง (station ก่อนหน้าไม่สำเร็จ)",
               })
             );
             break;
           }
           if (result !== "FAIL" && !out.skipped) sentPass = true;
           if (result === "FAIL") {
+            defectSent = true;
             // ชิ้นงาน FAIL ที่ station นี้ -> ไม่ส่ง station ถัดไป
             sentPass = false;
             rest.forEach((r) => setStationRuntime(r.id, { sn, status: "stopped", text: "ไม่ได้ส่ง (ชิ้นงาน FAIL ก่อนหน้า)" }));
@@ -527,7 +530,7 @@ export default function MesUpdate({ isDarkMode = false }) {
         setPassPopup(true);
         passPopupTimerRef.current = setTimeout(() => setPassPopup(false), PASS_POPUP_MS);
       }
-      return allOk;
+      return defect ? defectSent : allOk;
     },
     [operatorHeaders, handleOperator401]
   );
