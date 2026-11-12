@@ -143,6 +143,9 @@ git push
     (เครื่องสแกนอยู่ network ของ PC นั้น เช่น 192.168.1.x server เข้าไม่ถึง / เบราว์เซอร์ต่อ TCP เองไม่ได้)
     2 แบบ: TCP data port เช่น 9004 (Keyence SR) หรือ Modbus TCP — server ไม่ได้ต่อเครื่องสแกนแล้ว
     ถ้าเปลี่ยน URL เว็บ ต้องเพิ่มใน `MES_BRIDGE_ORIGINS` ของ Bridge
+    **relay** (`"relay": { scanner, listenPort: 9005, allow }` ใน `mes-bridge.config.json`): โปรแกรมอื่น (เช่น Themister_Real) ต่อ Keyence ผ่าน Bridge
+    ค่าเริ่มต้นส่ง QR ให้ทันที (Themister_Real รอ SN แค่ 10 วิ กักไว้ = SN เหลื่อมชิ้น) / `holdUntilWeb: true` = รอหน้าเว็บส่ง MES ไม่เกิน 8 วิหลังสแกน
+    Keyence หลุด = ตัดโปรแกรมที่ต่อ relay ทุกตัว / `/tcp/read` มี `runId` (Bridge เริ่มใหม่ seq นับใหม่ หน้าเว็บส่ง `run_id` กลับ)
     สแกน 1 ครั้ง → ส่งให้ทุก station ที่ Lock ตามลำดับบนลงล่าง รอ `delay_sec` วินาทีระหว่าง station (ตั้งต่อเครื่อง, 0 = ทันที)
     station ไม่สำเร็จ → ส่ง station ถัดไปต่อ (`continue_on_error`, default เปิด / ปิด = หยุด)
   - การตั้งค่าของแต่ละเครื่อง เก็บในเบราว์เซอร์เครื่องนั้น: `mesTerminal` (ชื่อเครื่อง), `mesModbus`, `mesStations`, `mesQualStations` (เกณฑ์ความสามารถ),

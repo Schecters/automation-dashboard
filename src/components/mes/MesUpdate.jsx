@@ -206,6 +206,7 @@ export default function MesUpdate({ isDarkMode = false }) {
   useEffect(() => () => clearTimeout(passPopupTimerRef.current), []);
   const lastSeenRef = useRef(""); // SN ล่าสุดที่อ่านจาก Modbus ("" = register ว่าง / ถูกล้าง)
   const tcpAfterRef = useRef(null); // seq ล่าสุดที่รับจาก TCP data port แล้ว (null = เพิ่งเริ่ม)
+  const tcpRunRef = useRef(null); // runId ของ Bridge ที่ seq ข้างบนอ้างถึง (Bridge เริ่มใหม่ = runId ใหม่ seq นับใหม่)
   const manualRef = useRef(null);
   const terminalRef = useRef(terminal);
   const modbusCfgRef = useRef(modbusCfg);
@@ -556,12 +557,19 @@ export default function MesUpdate({ isDarkMode = false }) {
     let cancelled = false;
     let timer = null;
     tcpAfterRef.current = null; // เริ่มใหม่: ไม่ส่งค่าที่สแกนไว้ก่อน Lock
+    tcpRunRef.current = null;
 
     // TCP data port: รับทุกครั้งที่สแกน (ชิ้นเดิมซ้ำก็นับ) ตามลำดับ
     const tickTcp = async () => {
       const cfg = modbusCfgRef.current;
-      const data = await bridgeRead("/tcp/read", { host: cfg.modbus_host, port: Number(cfg.tcp_port), after: tcpAfterRef.current });
+      const data = await bridgeRead("/tcp/read", {
+        host: cfg.modbus_host,
+        port: Number(cfg.tcp_port),
+        after: tcpAfterRef.current,
+        run_id: tcpRunRef.current, // Bridge 1.4+: runId ไม่ตรง = Bridge นับ after ใหม่ตั้งแต่ 0 ให้
+      });
       if (cancelled) return false;
+      if (data.runId) tcpRunRef.current = data.runId;
       setModbusStatus({ ok: !data.error, text: data.error || "เชื่อมต่อแล้ว" });
       if (tcpAfterRef.current === null) {
         tcpAfterRef.current = data.seq;
@@ -577,7 +585,8 @@ export default function MesUpdate({ isDarkMode = false }) {
           await bridgeRead("/tcp/release", { host: cfg.modbus_host, port: Number(cfg.tcp_port), seq: item.seq }).catch(() => {});
         }
       }
-      if (data.items.length === 0 && data.seq < tcpAfterRef.current) tcpAfterRef.current = data.seq; // Bridge เริ่มนับใหม่
+      // Bridge รุ่นเก่า (ไม่มี runId) เริ่มนับใหม่
+      if (!data.runId && data.items.length === 0 && data.seq < tcpAfterRef.current) tcpAfterRef.current = data.seq;
       return true;
     };
 

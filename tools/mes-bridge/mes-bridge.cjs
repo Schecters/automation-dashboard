@@ -21,13 +21,25 @@
 //   shareTo   / MES_BRIDGE_SHARE_TO   IP ของ PC อื่นที่ให้อ่านผ่านเครื่องนี้ (ว่าง = ไม่แชร์)
 //   peerPort  / MES_BRIDGE_PEER_PORT  port ที่เปิดให้ PC อื่น (default 18081)
 //   upstream  / MES_BRIDGE_UPSTREAM   "IP:port" ของ Bridge ที่ต่อ Keyence อยู่ (ตั้ง = เครื่องนี้ไม่ต่อ Keyence เอง)
+//
+//  relay (ให้ application เช่น Themister_Real ต่อ Keyence ผ่านเครื่องนี้ เพราะ Keyence รับ client ได้แค่ 1 ตัว):
+//   "relay": { "scanner": "192.168.1.49:9004", "listenPort": 9005, "allow": ["127.0.0.1"] }
+//   - holdUntilWeb (default false) = ส่ง QR ให้ application ทันทีที่สแกน (ทุก byte ตามเดิม)
+//       application บางตัวรอ SN แค่ ~10 วิ ถ้ากัก QR ไว้รอหน้าเว็บ SN จะไปตกชิ้นถัดไป (SN เหลื่อมชิ้น) จึงไม่กักเป็นค่าเริ่มต้น
+//   - holdUntilWeb: true = กักไว้จนหน้าเว็บส่ง MES เสร็จ แต่ไม่เกิน holdTimeoutMs นับจากตอนสแกน (default / สูงสุด 8000)
+//   - Keyence หลุด -> ตัด application ทุกตัว และไม่รับ application ใหม่จนกว่าต่อ Keyence ได้ (application จะรู้ว่าหลุดและล้าง buffer เอง)
+//   - allow มี 127.0.0.1 = รับ ::1 (localhost ทาง IPv6) ด้วย
+//
+//  /tcp/read ตอบ runId (เปลี่ยนเมื่อ Bridge เริ่มใหม่ / สร้างการอ่านเครื่องสแกนใหม่ ซึ่ง seq เริ่มนับ 1 ใหม่)
+//   หน้าเว็บส่ง run_id ที่รู้กลับมา ไม่ตรง = นับ after ใหม่ตั้งแต่ 0 (ไม่พลาด SN และไม่ได้ SN เก่าซ้ำ)
 // ==========================================
 const http = require('http');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
 
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
+const STARTED_AT = Date.now(); // ใช้สร้าง runId
 
 const CONFIG_FILE = path.join(__dirname, 'mes-bridge.config.json');
 let fileConfig = {};
@@ -54,10 +66,12 @@ const RELAY = fileConfig.relay || {};
 const RELAY_SCANNER = String(process.env.MES_BRIDGE_RELAY_SCANNER || RELAY.scanner || '').trim();
 const RELAY_ALLOW = listOf(process.env.MES_BRIDGE_RELAY_ALLOW || RELAY.allow);
 const RELAY_PORT = Number(process.env.MES_BRIDGE_RELAY_PORT || RELAY.listenPort || 9005);
-//  holdUntilWeb (default true) = ถ้าหน้าเว็บ /MES กำลัง Lock อยู่ ให้รอหน้าเว็บส่ง MES เสร็จก่อน แล้วค่อยส่ง QR ต่อให้ application
-//  holdTimeoutMs (default 30000) = หน้าเว็บไม่ตอบเกินเวลานี้ ส่งต่อให้ application เลย (กันค้าง)
-const RELAY_HOLD = RELAY.holdUntilWeb !== false;
-const RELAY_HOLD_TIMEOUT_MS = Math.max(1000, Number(RELAY.holdTimeoutMs) || 30000);
+//  holdUntilWeb (default false) = false: ส่ง QR ให้ application ทันที / true: หน้าเว็บ /MES Lock อยู่ ให้รอหน้าเว็บส่ง MES เสร็จก่อน
+//  holdTimeoutMs (default / สูงสุด 8000) = เวลากักสูงสุด นับจากตอนสแกน (ทั้งที่หน้าเว็บรับไปแล้วหรือยังไม่รับ)
+//   ต้องสั้นกว่าเวลาที่ application รอ SN (Themister_Real รอ 10 วิ) ไม่งั้น SN ไปตกชิ้นถัดไป
+const RELAY_HOLD = RELAY.holdUntilWeb === true;
+const RELAY_HOLD_MAX_MS = 8000;
+const RELAY_HOLD_TIMEOUT_MS = Math.min(RELAY_HOLD_MAX_MS, Math.max(500, Number(RELAY.holdTimeoutMs) || RELAY_HOLD_MAX_MS));
 
 const log = (...args) => console.log(new Date().toLocaleString('sv-SE'), ...args);
 
@@ -78,13 +92,17 @@ const TCP_RECONNECT_MS = 3000;
 const TCP_IDLE_CLOSE_MS = 15 * 1000; // หน้าเว็บเลิกถามเกินนี้ -> ปิด ให้เครื่องอื่นต่อได้
 const TCP_CONNECT_TIMEOUT_MS = 3000;
 const tcpReaders = new Map();
+let readerCount = 0;
 
 // persistent = ต่อค้างตลอด ไม่ปิดเมื่อหน้าเว็บเลิกใช้ (ใช้กับ relay ที่ application เครื่องอื่นต่ออยู่)
 // onRaw = รับข้อมูลดิบจากเครื่องสแกนทุก byte (relay ส่งต่อให้ application ตามเดิมทุกตัวอักษร)
 // onLine(raw, seq) = รับทีละบรรทัด (ข้อมูลดิบรวมตัวขึ้นบรรทัด) seq = ลำดับ SN หรือ null ถ้าไม่ใช่ SN (ERROR / บรรทัดว่าง)
-const createTcpReader = (host, port, { persistent = false, onRaw = null, onLine = null } = {}) => {
+// onDisconnect = เครื่องสแกนหลุด (relay ใช้ตัด application)
+// runId = เปลี่ยนทุกครั้งที่สร้าง reader ใหม่ (seq เริ่ม 1 ใหม่) ให้หน้าเว็บรู้ว่าต้องนับ after ใหม่
+const createTcpReader = (host, port, { persistent = false, onRaw = null, onLine = null, onDisconnect = null } = {}) => {
   const r = { host, port, socket: null, connected: false, lastError: null, readError: null, buffer: '',
-    seq: 0, items: [], lastPollAt: Date.now(), timer: null, closed: false, persistent };
+    seq: 0, items: [], lastPollAt: Date.now(), timer: null, closed: false, persistent,
+    runId: `${STARTED_AT.toString(36)}-${++readerCount}` };
 
   const connect = () => {
     if (r.closed) return;
@@ -130,9 +148,14 @@ const createTcpReader = (host, port, { persistent = false, onRaw = null, onLine 
       r.lastError = err.message;
     });
     socket.on('close', () => {
-      if (r.connected) log(`[WARN] TCP ${host}:${port} disconnected, reconnecting...`);
+      const wasConnected = r.connected;
+      if (wasConnected) log(`[WARN] TCP ${host}:${port} disconnected, reconnecting...`);
       r.connected = false;
       r.socket = null;
+      // หลุดกลางบรรทัด: ทิ้งข้อความที่ค้าง ไม่ให้ไปต่อหน้า SN แรกของการเชื่อมต่อใหม่
+      if (r.buffer) log(`[WARN] TCP ${host}:${port} dropped incomplete data ${JSON.stringify(r.buffer)}`);
+      r.buffer = '';
+      if (wasConnected && onDisconnect) onDisconnect();
       if (!r.closed) r.timer = setTimeout(connect, TCP_RECONNECT_MS);
     });
   };
@@ -173,7 +196,7 @@ const waitUntil = (fn, ms) =>
     }, 50);
   });
 
-const tcpRead = async ({ host, port, after }) => {
+const tcpRead = async ({ host, port, after, runId }) => {
   const key = `${host}:${port}`;
   let r = tcpReaders.get(key);
   if (!r) {
@@ -185,10 +208,12 @@ const tcpRead = async ({ host, port, after }) => {
   if (!r.connected) {
     throw new Error(`เชื่อมต่อเครื่องสแกน ${host}:${port} ไม่ได้${r.lastError ? `: ${r.lastError}` : ''}`);
   }
+  // หน้าเว็บจำ after ของรอบก่อน (Bridge เริ่มใหม่ / reader ใหม่) -> นับใหม่ตั้งแต่ 0 ของรอบนี้
+  if (after !== null && runId && runId !== r.runId) after = 0;
   let items = [];
   if (after !== null) items = after > r.seq ? r.items : r.items.filter((i) => i.seq > after);
   if (r.onPoll) r.onPoll(after, items);
-  return { connected: true, error: r.readError, seq: r.seq, items };
+  return { connected: true, error: r.readError, seq: r.seq, runId: r.runId, items };
 };
 
 // หน้าเว็บส่ง MES ของ SN ลำดับ seq เสร็จแล้ว (สำเร็จหรือไม่ก็ตาม) -> relay ส่ง QR นั้นต่อให้ application
@@ -414,12 +439,13 @@ const readScanner = async (pathname, b) => {
     if (!isPrivateIPv4(host)) throw new Error('IP เครื่องสแกนต้องเป็น IP ภายใน (10.x / 172.16-31.x / 192.168.x)');
     if (!validPort(port)) throw new Error('Port ไม่ถูกต้อง');
     if (after !== null && !Number.isInteger(after)) throw new Error('after ไม่ถูกต้อง');
+    const runId = typeof b.run_id === 'string' ? b.run_id.slice(0, 50) : null;
     if (pathname === '/tcp/release') {
       const seq = Number(b.seq);
       if (!Number.isInteger(seq)) throw new Error('seq ไม่ถูกต้อง');
       return tcpRelease({ host, port, seq });
     }
-    return tcpRead({ host, port, after });
+    return tcpRead({ host, port, after, runId });
   }
   // /modbus/read
   const cfg = parseModbusCfg(b);
@@ -582,7 +608,9 @@ if (peerServer) {
 // Relay: ต่อ Keyence (TCP data port) จากเครื่องนี้ครั้งเดียว แล้วเปิด port ให้ application เครื่องอื่นต่อเหมือนต่อ Keyence
 //  - ข้อมูลจาก Keyence ส่งต่อให้ทุก application ตามเดิมทุก byte และหน้าเว็บบนเครื่องนี้ก็ได้ค่าเดียวกัน
 //  - ข้อมูลจาก application (เช่นคำสั่ง) ส่งต่อไปที่ Keyence
-//  - รับเฉพาะ IP ใน allow
+//  - รับเฉพาะ IP ใน allow (127.0.0.1 = รับ ::1 ด้วย)
+//  - ค่าเริ่มต้นส่งต่อทันที / holdUntilWeb: true = กักรอหน้าเว็บ ไม่เกิน holdTimeoutMs นับจากตอนสแกน
+//  - Keyence หลุด -> ตัด application ทุกตัว ไม่รับใหม่จนต่อ Keyence ได้
 // ------------------------------------------
 if (RELAY_SCANNER) {
   const [scanHost, scanPortText] = RELAY_SCANNER.split(':');
@@ -596,15 +624,18 @@ if (RELAY_SCANNER) {
     process.exit(1);
   }
 
+  const relayAllow = new Set(RELAY_ALLOW);
+  if (relayAllow.has('127.0.0.1') || relayAllow.has('localhost')) relayAllow.add('127.0.0.1').add('::1');
   const relayClients = new Set();
   const key = `${scanHost}:${scanPort}`;
   const sendToClients = (buf) => {
     for (const c of relayClients) if (!c.destroyed) c.write(buf);
   };
 
-  // คิว QR ที่รอหน้าเว็บส่ง MES เสร็จ (ส่งต่อตามลำดับเสมอ ตัวหน้ายังไม่ปล่อย ตัวหลังก็รอ)
+  // (holdUntilWeb) คิว QR ที่รอหน้าเว็บส่ง MES เสร็จ — ส่งต่อตามลำดับ
   //  taken    = หน้าเว็บรับ SN นี้ไปแล้ว รอ /tcp/release
   //  released = ส่งต่อได้
+  //  ทุกตัวมีเส้นตาย RELAY_HOLD_TIMEOUT_MS นับจากตอนสแกน (q.at) ครบแล้วส่งต่อเลย ตัวหน้าจึงบล็อกตัวหลังได้ไม่เกินเส้นตายของตัวหน้า
   const WEB_ACTIVE_MS = 3000; // หน้าเว็บถามเครื่องสแกนทุก ~0.7 วิ เงียบเกินนี้ = ไม่ได้ Lock / ปิดหน้าไปแล้ว
   const queue = [];
   const webActive = () => Date.now() - reader.lastPollAt < WEB_ACTIVE_MS;
@@ -613,8 +644,8 @@ if (RELAY_SCANNER) {
     while (queue.length) {
       const q = queue[0];
       if (!q.released) {
-        if (q.taken && Date.now() - q.takenAt >= RELAY_HOLD_TIMEOUT_MS) {
-          log(`[WARN] Relay: web page did not finish seq ${q.seq} in ${RELAY_HOLD_TIMEOUT_MS} ms, forwarding anyway`);
+        if (Date.now() - q.at >= RELAY_HOLD_TIMEOUT_MS) {
+          log(`[WARN] Relay: web page did not finish seq ${q.seq} within ${RELAY_HOLD_TIMEOUT_MS} ms of the scan, forwarding anyway`);
         } else if (q.taken || active) {
           break;
         }
@@ -627,8 +658,18 @@ if (RELAY_SCANNER) {
     }
   };
 
+  // Keyence หลุด: ตัด application ทุกตัว (ให้รู้ว่าหลุดและล้าง buffer เอง) และทิ้ง QR ที่ยังกักไว้
+  const onScannerDisconnect = () => {
+    if (queue.length) log(`[WARN] Relay: dropped ${queue.length} QR waiting for the web page (scanner disconnected)`);
+    queue.length = 0;
+    const n = relayClients.size;
+    for (const c of relayClients) c.destroy();
+    if (n) log(`[WARN] Relay: disconnected ${n} application(s) because the scanner disconnected`);
+  };
+
   const reader = createTcpReader(scanHost, scanPort, {
     persistent: true,
+    onDisconnect: onScannerDisconnect,
     ...(RELAY_HOLD
       ? {
           onLine: (raw, seq) => {
@@ -672,8 +713,14 @@ if (RELAY_SCANNER) {
 
   const relayServer = net.createServer((sock) => {
     const ip = String(sock.remoteAddress || '').replace(/^::ffff:/, '');
-    if (!RELAY_ALLOW.includes(ip)) {
+    if (!relayAllow.has(ip)) {
       log(`[WARN] Relay rejected ${ip} (not in relay.allow)`);
+      sock.destroy();
+      return;
+    }
+    if (!reader.connected) {
+      // ยังต่อ Keyence ไม่ได้: ปิดทันที application จะต่อใหม่เอง (ไม่ให้ค้างเหมือนต่อได้แต่ไม่มีข้อมูล)
+      log(`[WARN] Relay rejected ${ip}: scanner ${key} is not connected${reader.lastError ? ` (${reader.lastError})` : ''}`);
       sock.destroy();
       return;
     }
@@ -697,11 +744,21 @@ if (RELAY_SCANNER) {
       log(`[INFO] Relay client disconnected ${ip}: ${lastError || 'connection closed'} (${relayClients.size} connected)`);
     });
   });
-  relayServer.on('error', exitOnListenError(RELAY_PORT));
-  relayServer.listen(RELAY_PORT, '0.0.0.0', () => {
-    log(`[OK] Relay: scanner ${key} -> port ${RELAY_PORT} for ${RELAY_ALLOW.join(', ')}`);
-    if (RELAY_HOLD) log('     While the MES page is locked, each QR is forwarded after the page finishes sending to MES');
+  // ฟังทั้ง IPv4 และ IPv6 ("::") ให้ localhost ทาง ::1 ต่อได้ / เครื่องที่ไม่มี IPv6 -> ฟัง IPv4 อย่างเดียว
+  const onRelayListening = () => {
+    log(`[OK] Relay: scanner ${key} -> port ${RELAY_PORT} for ${[...relayAllow].join(', ')}`);
+    if (RELAY_HOLD) {
+      log(`     While the MES page is locked, each QR is held until the page finishes sending to MES (max ${RELAY_HOLD_TIMEOUT_MS} ms after the scan)`);
+    } else {
+      log('     Each QR is forwarded to the application immediately');
+    }
     log(`     Set the application on those PCs to connect to THIS PC's IP, port ${RELAY_PORT}`);
     log(`     (Windows Firewall must allow inbound TCP port ${RELAY_PORT})`);
+  };
+  relayServer.once('error', (err) => {
+    if (err.code !== 'EAFNOSUPPORT' && err.code !== 'EADDRNOTAVAIL') return exitOnListenError(RELAY_PORT)(err);
+    relayServer.on('error', exitOnListenError(RELAY_PORT));
+    relayServer.listen(RELAY_PORT, '0.0.0.0', onRelayListening);
   });
+  relayServer.listen(RELAY_PORT, '::', onRelayListening);
 }
