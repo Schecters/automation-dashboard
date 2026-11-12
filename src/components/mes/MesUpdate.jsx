@@ -447,7 +447,7 @@ export default function MesUpdate({ isDarkMode = false }) {
             if (!mesAuthRef.current) return false; // ออกจากระบบระหว่างรอ
           }
           const isDefect = Boolean(defect) && st.id === defect.stationId;
-          // station แบบ input ที่เป็นจุดงานเสีย -> ส่ง FAIL ที่ routing-input เหมือน station อื่น
+          // งานเสีย: station แบบ input ส่ง FAIL ที่ routing-input / station แบบ routing ส่ง routing-check -> routing-update FAIL
           const inputMode = isInputMode(st) && !isDefect;
           const result = isDefect ? "FAIL" : inputMode ? "INPUT" : "PASS";
           setStationRuntime(st.id, {
@@ -466,8 +466,9 @@ export default function MesUpdate({ isDarkMode = false }) {
                 sn,
                 result,
                 mode: inputMode ? "input" : "routing",
-                barcode_prefix: inputMode || isDefect ? st.barcode_prefix || "" : undefined,
-                barcode_length: inputMode || isDefect ? Number(st.barcode_length) || 0 : undefined,
+                fail_via_input: isDefect && isInputMode(st) ? true : undefined,
+                barcode_prefix: isInputMode(st) ? st.barcode_prefix || "" : undefined,
+                barcode_length: isInputMode(st) ? Number(st.barcode_length) || 0 : undefined,
                 line: st.line,
                 station: st.station,
                 group: st.group_name,

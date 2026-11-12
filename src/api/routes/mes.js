@@ -277,9 +277,10 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
       }
       testData = buildDefectTestData({ sn, defectCode: defect.defect_code, description: defect.description, empNo });
     }
-    // FAIL (งานเสีย) ส่งที่ routing-input (MES check-in SN เอง ไม่ต้อง routing-check) / PASS ใช้ routing-check -> routing-update เหมือนเดิม
+    // FAIL ของ station แบบ input ส่งที่ routing-input (MES check-in SN เอง ไม่ต้อง routing-check)
+    // FAIL ของ station แบบ routing ใช้ routing-check -> routing-update (FAIL + testData) แบบเดิม
     const failPayload =
-      mode === 'routing' && result === 'FAIL'
+      mode === 'routing' && result === 'FAIL' && req.body?.fail_via_input === true
         ? buildRoutingInputPayload({
             ...fields,
             result,
