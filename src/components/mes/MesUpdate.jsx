@@ -191,9 +191,7 @@ export default function MesUpdate({ isDarkMode = false }) {
   const [qualStations, setQualStations] = useState(() => loadJson(MES_QUAL_KEY, []));
   const [sendOptions, setSendOptions] = useState(() => loadSendOptions(loadJson(MES_SEND_KEY, null)));
   const [delayInput, setDelayInput] = useState(() => String(sendOptions.delay_sec));
-  const [dashLines, setDashLines] = useState([]); // Line จาก dashboard (ไม่ใช่จาก MES)
   const [qualForm, setQualForm] = useState({ line: "", station: "" });
-  const [qualLineStations, setQualLineStations] = useState([]);
   const [qualExams, setQualExams] = useState({}); // "line|station" -> [{ file_name, min_score, is_required }] | { error }
 
   const stationsRef = useRef([]);
@@ -742,7 +740,7 @@ export default function MesUpdate({ isDarkMode = false }) {
     }
   };
 
-  // ---------- เกณฑ์ความสามารถ operator (Line / Station / ข้อสอบ จาก dashboard) ----------
+  // ---------- เกณฑ์ความสามารถ operator (Line / Station จาก MES, ข้อสอบตั้งในหน้า Lines & Station ของ dashboard) ----------
   const fetchQualExams = async (q) => {
     try {
       const res = await fetch(`${API_URL}/lines/${encodeURIComponent(q.line)}/stations/${encodeURIComponent(q.station)}/exams`);
@@ -756,30 +754,12 @@ export default function MesUpdate({ isDarkMode = false }) {
     }
   };
 
-  const loadQualSettings = async () => {
+  // Line / Station ให้เลือกมาจาก MES (lineInfo ชุดเดียวกับหน้าตั้งค่า station) — ตรงกับหน้า Lines & Station ที่ดึงจาก MES
+  const loadQualSettings = () => {
     qualStations.forEach(fetchQualExams);
-    try {
-      const res = await fetch(`${API_URL}/lines`);
-      const data = await res.json();
-      if (Array.isArray(data)) setDashLines(data.map((l) => String(l.id)));
-    } catch (err) {
-      setMessage({ type: "error", text: `โหลด Line จาก dashboard ไม่ได้: ${err.message}` });
-    }
   };
 
-  const changeQualLine = async (line) => {
-    setQualForm({ line, station: "" });
-    setQualLineStations([]);
-    if (!line) return;
-    try {
-      const res = await fetch(`${API_URL}/lines/${encodeURIComponent(line)}/stations`);
-      const data = await res.json();
-      if (data.success) setQualLineStations(data.data.map((s) => ({ id: String(s.id), name: s.name || "" })));
-      else setMessage({ type: "error", text: data.message });
-    } catch (err) {
-      setMessage({ type: "error", text: `โหลด Station ของ ${line} ไม่ได้: ${err.message}` });
-    }
-  };
+  const changeQualLine = (line) => setQualForm({ line, station: "" });
 
   const saveQualStations = (next) => {
     saveJson(MES_QUAL_KEY, next);
@@ -898,6 +878,11 @@ export default function MesUpdate({ isDarkMode = false }) {
   };
 
   const lines = useMemo(() => [...new Set(lineInfo.map((r) => r.line))].sort(), [lineInfo]);
+  // Station ของ Line ที่เลือกในเกณฑ์ความสามารถ (จาก MES)
+  const qualLineStations = useMemo(
+    () => [...new Set(lineInfo.filter((r) => r.line === qualForm.line).map((r) => r.station))].map((id) => ({ id: String(id), name: "" })),
+    [lineInfo, qualForm.line]
+  );
   const formLine = stationForm?.line;
   const stationsOfFormLine = useMemo(
     () =>
@@ -1300,7 +1285,7 @@ export default function MesUpdate({ isDarkMode = false }) {
           </div>
         </div>
 
-        {/* 4) เกณฑ์ความสามารถ operator (จาก Lines & Stations ของ dashboard) */}
+        {/* 4) เกณฑ์ความสามารถ operator (Line / Station จาก MES, ข้อสอบจาก Lines & Station ของ dashboard) */}
         <div className={`rounded-2xl border p-4 space-y-3 ${card}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -1313,15 +1298,15 @@ export default function MesUpdate({ isDarkMode = false }) {
                 (ข้อสอบและคะแนนขั้นต่ำ ตั้งในหน้า Lines &amp; Stations ของ dashboard)
               </p>
             </div>
-            <button type="button" className={btnGhost} onClick={loadQualSettings}>↻ โหลดใหม่</button>
+            <button type="button" className={btnGhost} onClick={() => { loadQualSettings(); fetchLineInfo(); }}>↻ โหลดใหม่</button>
           </div>
 
           <div className="flex flex-wrap items-end gap-2">
             <div>
-              <label className={label}>Line (dashboard)</label>
+              <label className={label}>Line (MES)</label>
               <select className={`${input} w-40`} value={qualForm.line} onChange={(e) => changeQualLine(e.target.value)}>
                 <option value="">— เลือก Line —</option>
-                {dashLines.map((l) => <option key={l} value={l}>{l}</option>)}
+                {lines.map((l) => <option key={l} value={l}>{l}</option>)}
               </select>
             </div>
             <div>

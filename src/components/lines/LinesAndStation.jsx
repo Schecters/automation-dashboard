@@ -135,6 +135,7 @@ export default function LinesAndStation({ isDarkMode }) {
   const [error, setError] = useState(null);
   const [mesError, setMesError] = useState(null); // ดึง Line / Station จาก MES ไม่ได้
   const [searchTerm, setSearchTerm] = useState('');
+  const [lineSearchTerm, setLineSearchTerm] = useState(''); // ค้นหา Line (ชื่อ Line / Station / หัวหน้า)
   const [activeTab, setActiveTab] = useState('all');
 
   const userRole = (localStorage.getItem("userRole") || "").toLowerCase().trim();
@@ -509,6 +510,16 @@ export default function LinesAndStation({ isDarkMode }) {
     }
   };
 
+  const filteredLines = (lines || []).filter((line) => {
+    const q = lineSearchTerm.toLowerCase().trim();
+    if (!q) return true;
+    return (
+      String(line.id).toLowerCase().includes(q) ||
+      (line.stations || []).some((st) => String(st.id).toLowerCase().includes(q)) ||
+      (line.owners || []).some((o) => String(o.employee_id).includes(q) || (o.name || '').toLowerCase().includes(q))
+    );
+  });
+
   const filteredStations = (stations || []).filter((st) =>
     (st.id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (st.name || '').toLowerCase().includes(searchTerm.toLowerCase())
@@ -657,14 +668,26 @@ export default function LinesAndStation({ isDarkMode }) {
       {/* Section 1: Lines */}
       {(activeTab === 'all' || activeTab === 'lines') && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h3 className={`text-sm font-semibold flex items-center gap-2 ${isDarkMode ? 'text-slate-200' : 'text-gray-700'}`}>
-              Production Lines ({lines.length})
+              Production Lines ({filteredLines.length}{lineSearchTerm.trim() ? ` / ${lines.length}` : ''})
             </h3>
+            <input
+              type="text"
+              placeholder="Search Line / Station / หัวหน้า..."
+              value={lineSearchTerm}
+              onChange={(e) => setLineSearchTerm(e.target.value)}
+              className={`w-full sm:w-72 px-3 py-1.5 rounded-xl text-xs border outline-none transition-all ${
+                isDarkMode ? 'bg-[#1E293B] border-slate-700 text-white' : 'bg-white border-gray-300 text-gray-900'
+              }`}
+            />
           </div>
+          {filteredLines.length === 0 && (
+            <div className="py-6 text-center text-xs text-gray-400">ไม่พบ Line ที่ตรงกับการค้นหา</div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {lines.map((line) => (
+            {filteredLines.map((line) => (
               <div 
                 key={line.id} 
                 className={`rounded-2xl border transition-all flex flex-col justify-between overflow-hidden shadow-sm ${

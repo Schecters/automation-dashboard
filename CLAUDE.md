@@ -134,7 +134,7 @@ git push
   หน้าใช้งาน `src/components/mes/MesUpdate.jsx`, API `src/api/routes/mes.js` — **ไม่ใช้ Database เอง** (อาการ / ประวัติงานเสียอยู่ที่ service data เรียกผ่าน `internalFetch`)
   - operator login ด้วยรหัสพนักงาน ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดก็ได้ใน `auth.excel_configs`
     ฟังก์ชัน `findOperatorExams` ใน `src/api/lib/operatorExams.js`, เรียกตรงได้ที่ `/api/operator-exam-check?employee_id=`)
-    ถ้าเครื่องนั้นตั้ง **เกณฑ์ความสามารถ** (`mesQualStations` = Line/Station จาก dashboard) operator ต้องผ่านข้อสอบบังคับ + คะแนนขั้นต่ำ
+    ถ้าเครื่องนั้นตั้ง **เกณฑ์ความสามารถ** (`mesQualStations` = Line / Station จาก MES, ข้อสอบตั้งในหน้า Lines & Station) operator ต้องผ่านข้อสอบบังคับ + คะแนนขั้นต่ำ
     ของ **ทุก** station ที่ตั้ง (`checkOperatorQualification` ใน `operatorExams.js`, เกณฑ์จาก `automation_lines.station_exams`) — ไม่ตั้ง = เช็คแบบเดิม
     ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
