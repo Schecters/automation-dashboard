@@ -133,6 +133,7 @@ export default function LinesAndStation({ isDarkMode }) {
   const [excelConfigs, setExcelConfigs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [mesError, setMesError] = useState(null); // ดึง Line / Station จาก MES ไม่ได้
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState('all');
 
@@ -152,8 +153,6 @@ export default function LinesAndStation({ isDarkMode }) {
   const [selectedOwners, setSelectedOwners] = useState([]);
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [userRoleFilter, setUserRoleFilter] = useState('all');
-  const [selectedStations, setSelectedStations] = useState([]);
-  const [stationSearchTerm, setStationSearchTerm] = useState('');
 
   // Modal State: Stations
   const [stationModalOpen, setStationModalOpen] = useState(false);
@@ -177,14 +176,18 @@ export default function LinesAndStation({ isDarkMode }) {
     };
   };
 
+  // Line / Station มาจาก MES (/api/mes/lineinfo) — database เก็บแค่หัวหน้า Line และข้อสอบของ Station
+  //  Line / Station ใน database ที่ไม่มีใน MES ไม่แสดง
   const fetchData = async () => {
     setLoading(true);
     setError(null);
+    setMesError(null);
     try {
       const headers = getHeaders();
-      const [resLines, resStations, resUsers, resConfigs] = await Promise.all([
+      const [resLines, resStations, resMes, resUsers, resConfigs] = await Promise.all([
         fetch(`${API_URL}/lines`, { headers }),
         fetch(`${API_URL}/stations`, { headers }),
+        fetch(`${API_URL}/mes/lineinfo`, { headers }),
         isAdmin ? fetch(`${API_URL}/users`, { headers }) : Promise.resolve(null),
         isAdmin ? fetch(`${API_URL}/excel-configs`, { headers }) : Promise.resolve(null)
       ]);
@@ -192,37 +195,51 @@ export default function LinesAndStation({ isDarkMode }) {
       if (!resLines.ok || !resStations.ok) throw new Error('เกิดข้อผิดพลาดในการดึงข้อมูล');
 
       const linesData = await resLines.json();
-      const rawLines = Array.isArray(linesData) ? linesData : linesData.data || [];
-
-      const linesWithStations = await Promise.all(
-        rawLines.map(async (l) => {
-          try {
-            const resSt = await fetch(`${API_URL}/lines/${encodeURIComponent(l.id)}/stations`, { headers });
-            const dataSt = await resSt.json();
-            return {
-              ...l,
-              stations: dataSt.success && Array.isArray(dataSt.data) ? dataSt.data : []
-            };
-          } catch {
-            return { ...l, stations: [] };
-          }
-        })
-      );
-      setLines(linesWithStations);
+      const dbLines = Array.isArray(linesData) ? linesData : linesData.data || [];
+      const dbLineByKey = new Map(dbLines.map((l) => [String(l.id).toUpperCase(), l]));
 
       const stationsData = await resStations.json();
-      const rawStations = Array.isArray(stationsData) ? stationsData : stationsData.data || [];
+      const dbStationIds = new Set((Array.isArray(stationsData) ? stationsData : stationsData.data || []).map((st) => String(st.id)));
+
+      // Line / Station จาก MES (เรียงตามที่ MES ส่งมา)
+      const mesData = await resMes.json().catch(() => ({}));
+      const mesRows = mesData.success && Array.isArray(mesData.data) ? mesData.data : [];
+      if (!mesData.success) setMesError(mesData.message || `HTTP ${resMes.status}`);
+
+      const mesLines = new Map();
+      const mesStationNames = [];
+      for (const r of mesRows) {
+        const lineName = String(r.line || '').trim();
+        const stName = String(r.station || '').trim();
+        if (!lineName) continue;
+        if (!mesLines.has(lineName)) mesLines.set(lineName, []);
+        const lineStations = mesLines.get(lineName);
+        if (stName && !lineStations.some((st) => st.id === stName)) lineStations.push({ id: stName, name: stName });
+        if (stName && !mesStationNames.includes(stName)) mesStationNames.push(stName);
+      }
+
+      setLines(
+        [...mesLines.entries()].map(([lineName, lineStations]) => {
+          const dbLine = dbLineByKey.get(lineName.toUpperCase());
+          return {
+            id: lineName,
+            dbId: dbLine ? dbLine.id : null, // null = ยังไม่มีใน database (สร้างตอนบันทึกครั้งแรก)
+            owners: dbLine?.owners || [],
+            stations: lineStations
+          };
+        })
+      );
+
       const stationsWithExams = await Promise.all(
-        rawStations.map(async (st) => {
+        mesStationNames.map(async (name) => {
+          const st = { id: name, name, inDb: dbStationIds.has(name), required_exams: [] };
+          if (!st.inDb) return st;
           try {
-            const resEx = await fetch(`${API_URL}/stations/${encodeURIComponent(st.id)}/exams`, { headers });
+            const resEx = await fetch(`${API_URL}/stations/${encodeURIComponent(name)}/exams`, { headers });
             const dataEx = await resEx.json();
-            return {
-              ...st,
-              required_exams: dataEx.success && Array.isArray(dataEx.data) ? dataEx.data : []
-            };
+            return { ...st, required_exams: dataEx.success && Array.isArray(dataEx.data) ? dataEx.data : [] };
           } catch {
-            return { ...st, required_exams: [] };
+            return st;
           }
         })
       );
@@ -242,6 +259,26 @@ export default function LinesAndStation({ isDarkMode }) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Station ที่ยังไม่มีใน database -> สร้าง (id = name = ชื่อ Station ของ MES) ก่อนผูก Line / ข้อสอบ
+  const ensureStationsInDb = async (stationIds, headers) => {
+    for (const id of stationIds) {
+      const st = stations.find((x) => x.id === id);
+      if (st?.inDb) continue;
+      const res = await fetch(`${API_URL}/stations`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ id, name: id })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        // มีอยู่แล้ว (สร้างจากที่อื่น) ใช้ต่อได้
+        if (res.status !== 400 || !/มีอยู่ในระบบแล้ว/.test(data.message || '')) {
+          throw new Error(data.message || `สร้าง Station ${id} ไม่สำเร็จ`);
+        }
+      }
     }
   };
 
@@ -266,18 +303,6 @@ export default function LinesAndStation({ isDarkMode }) {
     setViewLineModalOpen(true);
   };
 
-  const handleOpenAddLine = () => {
-    if (!isAdmin) return;
-    setEditingLine(null);
-    setLineIdInput('');
-    setSelectedOwners([]);
-    setSelectedStations([]);
-    setUserSearchTerm('');
-    setUserRoleFilter('all');
-    setStationSearchTerm('');
-    setLineModalOpen(true);
-  };
-
   const handleOpenEditLine = (line) => {
     if (!isAdmin) return;
     setEditingLine(line);
@@ -289,44 +314,43 @@ export default function LinesAndStation({ isDarkMode }) {
       email: o.email || resolveOwnerEmail(o.employee_id)
     }));
     setSelectedOwners(formattedOwners);
-    setSelectedStations(line.stations ? line.stations.map(s => s.id) : []);
     setUserSearchTerm('');
     setUserRoleFilter('all');
-    setStationSearchTerm('');
     setLineModalOpen(true);
   };
 
   const handleSaveLine = async (e) => {
     e.preventDefault();
     if (!isAdmin) return alert('เฉพาะ Admin เท่านั้นที่สามารถแก้ไขข้อมูลได้');
-    if (!lineIdInput.trim()) return alert('กรุณากรอก Line ID');
+    if (!editingLine) return;
 
     setActionLoading(true);
     try {
       const headers = getHeaders();
-      const targetLineId = lineIdInput.trim().toUpperCase();
+      // Line จาก MES: ยังไม่มีใน database -> สร้าง (POST แปลง id เป็นตัวพิมพ์ใหญ่) / มีแล้ว -> แก้หัวหน้า
+      const targetLineId = editingLine.dbId || editingLine.id.toUpperCase();
+      const stationIds = (editingLine.stations || []).map((st) => st.id);
+      await ensureStationsInDb(stationIds, headers);
 
-      let res;
-      if (editingLine) {
-        res = await fetch(`${API_URL}/lines/${editingLine.id}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({ new_id: targetLineId, owner_ids: selectedOwners })
-        });
-      } else {
-        res = await fetch(`${API_URL}/lines`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ id: targetLineId, owner_ids: selectedOwners })
-        });
-      }
+      const res = editingLine.dbId
+        ? await fetch(`${API_URL}/lines/${encodeURIComponent(editingLine.dbId)}`, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify({ new_id: editingLine.dbId, owner_ids: selectedOwners })
+          })
+        : await fetch(`${API_URL}/lines`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ id: editingLine.id, owner_ids: selectedOwners })
+          });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'บันทึกข้อมูลไม่สำเร็จ');
 
+      // ผูก Station ของ Line ให้ตรงกับ MES (ตามลำดับ)
       const resStationMapping = await fetch(`${API_URL}/lines/${encodeURIComponent(targetLineId)}/stations`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ station_ids: selectedStations })
+        body: JSON.stringify({ station_ids: stationIds })
       });
       const dataMapping = await resStationMapping.json();
       if (!resStationMapping.ok) throw new Error(dataMapping.message || 'ผูก Station กับ Line ไม่สำเร็จ');
@@ -372,42 +396,6 @@ export default function LinesAndStation({ isDarkMode }) {
     setSelectedOwners(prev =>
       prev.map(o => o.employee_id === empId ? { ...o, role_type: newRoleType } : o)
     );
-  };
-
-  const toggleStationSelection = (stId) => {
-    setSelectedStations(prev =>
-      prev.includes(stId) ? prev.filter(id => id !== stId) : [...prev, stId]
-    );
-  };
-
-  const filteredModalStations = (stations || []).filter((st) => {
-    const q = stationSearchTerm.toLowerCase().trim();
-    if (!q) return true;
-    return (st.id || '').toLowerCase().includes(q) || (st.name || '').toLowerCase().includes(q);
-  });
-
-  const isAllVisibleStationsSelected =
-    filteredModalStations.length > 0 &&
-    filteredModalStations.every((st) => selectedStations.includes(st.id));
-
-  const handleSelectAllStations = () => {
-    const visibleIds = filteredModalStations.map((st) => st.id);
-    setSelectedStations((prev) => Array.from(new Set([...prev, ...visibleIds])));
-  };
-
-  const handleClearAllStations = () => {
-    const visibleIds = filteredModalStations.map((st) => st.id);
-    setSelectedStations((prev) => prev.filter((id) => !visibleIds.includes(id)));
-  };
-
-  // Station Handlers
-  const handleOpenAddStation = () => {
-    if (!isAdmin) return;
-    setEditingStation(null);
-    setStationIdInput('');
-    setStationNameInput('');
-    setExamRules([]);
-    setStationModalOpen(true);
   };
 
   const handleOpenEditStation = (station) => {
@@ -471,31 +459,14 @@ export default function LinesAndStation({ isDarkMode }) {
   const handleSaveStation = async (e) => {
     e.preventDefault();
     if (!isAdmin) return alert('เฉพาะ Admin เท่านั้นที่สามารถแก้ไขข้อมูลได้');
-    if (!stationIdInput.trim() || !stationNameInput.trim()) {
-      return alert('กรุณากรอกรหัสและชื่อ Station ให้ครบถ้วน');
-    }
+    if (!editingStation) return;
 
     setActionLoading(true);
     try {
       const headers = getHeaders();
-      const targetStationId = stationIdInput.trim();
-
-      let res;
-      if (editingStation) {
-        res = await fetch(`${API_URL}/stations/${editingStation.id}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({ new_id: targetStationId, name: stationNameInput.trim() })
-        });
-      } else {
-        res = await fetch(`${API_URL}/stations`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ id: targetStationId, name: stationNameInput.trim() })
-        });
-      }
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'บันทึกข้อมูล Station ไม่สำเร็จ');
+      // Station จาก MES: ชื่อแก้ไม่ได้ / ยังไม่มีใน database -> สร้างก่อน แล้วบันทึกข้อสอบ
+      const targetStationId = editingStation.id;
+      await ensureStationsInDb([targetStationId], headers);
 
       const resExams = await fetch(`${API_URL}/stations/${encodeURIComponent(targetStationId)}/exams`, {
         method: 'POST',
@@ -674,6 +645,15 @@ export default function LinesAndStation({ isDarkMode }) {
         </div>
       </div>
 
+      <div className={`px-4 py-2.5 rounded-xl border text-xs ${isDarkMode ? 'bg-blue-500/10 border-blue-500/30 text-blue-200' : 'bg-blue-50 border-blue-200 text-blue-800'}`}>
+        Line และ Station ดึงจาก MES — ที่นี่ผูกหัวหน้า Line (Owner / Leader / Supervisor) และข้อสอบของ Station
+      </div>
+      {mesError && (
+        <div className="px-4 py-2.5 rounded-xl border text-xs bg-rose-500/10 border-rose-500/30 text-rose-500">
+          ดึง Line / Station จาก MES ไม่ได้: {mesError} — กดปุ่มรีเฟรชเพื่อลองใหม่
+        </div>
+      )}
+
       {/* Section 1: Lines */}
       {(activeTab === 'all' || activeTab === 'lines') && (
         <div className="space-y-3">
@@ -681,17 +661,6 @@ export default function LinesAndStation({ isDarkMode }) {
             <h3 className={`text-sm font-semibold flex items-center gap-2 ${isDarkMode ? 'text-slate-200' : 'text-gray-700'}`}>
               Production Lines ({lines.length})
             </h3>
-            {isAdmin && (
-              <button
-                onClick={handleOpenAddLine}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-all"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
-                </svg>
-                <span>Add Line</span>
-              </button>
-            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -795,6 +764,7 @@ export default function LinesAndStation({ isDarkMode }) {
                         <span>Edit</span>
                       </button>
                       <button
+                        hidden
                         onClick={() => handleDeleteLine(line.id)}
                         className="p-1.5 text-rose-500 hover:bg-rose-500/10 border border-rose-500/20 rounded-xl transition-colors shadow-sm"
                       >
@@ -829,14 +799,6 @@ export default function LinesAndStation({ isDarkMode }) {
                   isDarkMode ? 'bg-[#1E293B] border-slate-700 text-white' : 'bg-white border-gray-300 text-gray-900'
                 }`}
               />
-              {isAdmin && (
-                <button
-                  onClick={handleOpenAddStation}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-all"
-                >
-                  <span>Add Station</span>
-                </button>
-              )}
             </div>
           </div>
 
@@ -903,7 +865,7 @@ export default function LinesAndStation({ isDarkMode }) {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                               </svg>
                             </button>
-                            <button onClick={() => handleDeleteStation(st.id)} className="p-1.5 text-gray-400 hover:text-rose-500 rounded-lg">
+                            <button hidden onClick={() => handleDeleteStation(st.id)} className="p-1.5 text-gray-400 hover:text-rose-500 rounded-lg">
                               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                               </svg>
@@ -940,7 +902,8 @@ export default function LinesAndStation({ isDarkMode }) {
                       type="text"
                       required
                       value={lineIdInput}
-                      onChange={(e) => setLineIdInput(e.target.value.toUpperCase())}
+                      readOnly
+                      title="ชื่อ Line จาก MES (แก้ไม่ได้)"
                       className={`w-full px-3 py-2 text-xs rounded-xl border font-mono ${
                         isDarkMode ? 'bg-[#0F172A] border-slate-700 text-white' : 'bg-gray-50 border-gray-300 text-gray-900'
                       }`}
@@ -1036,62 +999,24 @@ export default function LinesAndStation({ isDarkMode }) {
                 </div>
 
                 <div className="md:col-span-7 flex flex-col">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-semibold text-gray-400">ผูก Stations ({selectedStations.length})</label>
-                    <button
-                      type="button"
-                      onClick={isAllVisibleStationsSelected ? handleClearAllStations : handleSelectAllStations}
-                      className="text-[11px] font-semibold text-purple-400 hover:underline"
-                    >
-                      {isAllVisibleStationsSelected ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'}
-                    </button>
-                  </div>
-
-                  <div className="relative mb-2">
-                    <input
-                      type="text"
-                      placeholder="Search Station ID / Name..."
-                      value={stationSearchTerm}
-                      onChange={(e) => setStationSearchTerm(e.target.value)}
-                      className={`w-full pl-7 pr-6 py-1.5 text-xs rounded-xl border outline-none ${
-                        isDarkMode ? 'bg-[#0F172A] border-slate-700 text-white placeholder-slate-500' : 'bg-gray-50 border-gray-300 text-gray-900 placeholder-gray-400'
-                      }`}
-                    />
-                    {stationSearchTerm && (
-                      <button
-                        type="button"
-                        onClick={() => setStationSearchTerm('')}
-                        className="absolute right-2 top-1.5 text-xs text-gray-400 hover:text-gray-200"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-
-                  <div className={`flex-1 min-h-[290px] max-h-[320px] overflow-y-auto p-2 rounded-xl border space-y-1.5 custom-scrollbar ${
+                  <label className="text-xs font-semibold text-gray-400 mb-1.5">
+                    Stations ของ Line นี้ใน MES ({editingLine?.stations?.length || 0}) — ผูกให้อัตโนมัติตอนบันทึก
+                  </label>
+                  <div className={`flex-1 min-h-[290px] max-h-[360px] overflow-y-auto p-2 rounded-xl border space-y-1.5 custom-scrollbar ${
                     isDarkMode ? 'bg-[#0F172A] border-slate-700' : 'bg-gray-50 border-gray-300'
                   }`}>
-                    {filteredModalStations.length === 0 ? (
-                      <div className="text-center py-6 text-xs text-gray-400">ไม่พบ Station ที่ตรงกับการค้นหา</div>
+                    {(editingLine?.stations || []).length === 0 ? (
+                      <div className="text-center py-6 text-xs text-gray-400">MES ไม่มี Station ใน Line นี้</div>
                     ) : (
-                      filteredModalStations.map((st) => {
-                        const isSelected = selectedStations.includes(st.id);
-                        return (
-                          <div
-                            key={st.id}
-                            onClick={() => toggleStationSelection(st.id)}
-                            className={`flex items-center justify-between p-2.5 rounded-xl cursor-pointer text-xs border ${
-                              isSelected ? 'bg-purple-600 border-purple-500 text-white' : isDarkMode ? 'bg-slate-800/40 border-slate-700/60' : 'bg-white border-gray-200'
-                            }`}
-                          >
-                            <div className="flex items-center gap-3">
-                              <input type="checkbox" checked={isSelected} readOnly className="pointer-events-none" />
-                              <span className="font-mono font-bold">{st.id}</span>
-                              <span>{st.name}</span>
-                            </div>
-                          </div>
-                        );
-                      })
+                      editingLine.stations.map((st, idx) => (
+                        <div
+                          key={st.id}
+                          className={`flex items-center gap-3 p-2.5 rounded-xl text-xs border ${isDarkMode ? 'bg-slate-800/40 border-slate-700/60' : 'bg-white border-gray-200'}`}
+                        >
+                          <span className="text-[10px] text-gray-400 w-5 text-right">{idx + 1}</span>
+                          <span className="font-mono font-bold">{st.id}</span>
+                        </div>
+                      ))
                     )}
                   </div>
                 </div>
@@ -1130,7 +1055,8 @@ export default function LinesAndStation({ isDarkMode }) {
                       type="text"
                       required
                       value={stationIdInput}
-                      onChange={(e) => setStationIdInput(e.target.value)}
+                      readOnly
+                      title="ชื่อ Station จาก MES (แก้ไม่ได้)"
                       className={`w-full px-3 py-2 text-xs rounded-xl border font-mono ${
                         isDarkMode ? 'bg-[#0F172A] border-slate-700 text-white' : 'bg-gray-50 border-gray-300 text-gray-900'
                       }`}
@@ -1142,7 +1068,7 @@ export default function LinesAndStation({ isDarkMode }) {
                       type="text"
                       required
                       value={stationNameInput}
-                      onChange={(e) => setStationNameInput(e.target.value)}
+                      readOnly
                       className={`w-full px-3 py-2 text-xs rounded-xl border ${
                         isDarkMode ? 'bg-[#0F172A] border-slate-700 text-white' : 'bg-gray-50 border-gray-300 text-gray-900'
                       }`}
