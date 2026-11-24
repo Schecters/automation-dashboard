@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { socket, deviceId } from "../../socket";
 import MesLogin from "../../pages/MesLogin";
+import {
+  SERIAL_BAUDS, serialSupported, serialUnsupportedReason, serialPortLabel, pickSerialPort, openSerialScanner, testSerialScanner,
+} from "./serialScanner";
 
 // 🏭 MES Update (เปิดที่ https://<server>:5173/MES)
 //  - operator login ด้วยรหัสพนักงาน → เลือก WO ครั้งเดียว (ใช้กับทุก station) → Lock station ที่จะใช้
 //  - แสดง Progress ของ WO (Output / Target) จาก WMS ผ่าน /api/mes/wo-progress (โหลดใหม่ทุก 30 วินาที)
-//  - เครื่องนี้ต่อ Modbus TCP กับเครื่องสแกน Keyence "ครั้งเดียว" (ตั้งค่าต่อเครื่อง)
+//  - เครื่องนี้ตั้งการเชื่อมต่อ "ครั้งเดียว" (ต่อเครื่อง): กล้อง Keyence (TCP / Modbus ผ่าน MES Bridge) หรือ Scanner COM port (Web Serial)
 //  - สแกน QR 1 ครั้ง → ส่ง routing-update ไปทุก station ที่ Lock ตามลำดับ บนลงล่าง (station 1 → 2 → ...)
 //  - สแกนด้วย scanner ที่ต่อเครื่อง (พิมพ์ลงช่อง + Enter) ได้ด้วย
 //  - การตั้งค่า (ชื่อเครื่อง / Modbus / station) ทำได้เฉพาะ ME และ admin — เก็บในเบราว์เซอร์ของเครื่องนี้ (ไม่ใช้ DB)
@@ -93,7 +96,15 @@ const EMPTY_STATION_FORM = {
 const isInputMode = (st) => st?.send_mode === "input";
 // การเชื่อมต่อเครื่องสแกน: mode "tcp" = Keyence ส่งผลอ่านมาทาง TCP data port, "modbus" = อ่าน register
 // (ค่าที่บันทึกไว้รุ่นก่อนไม่มี mode = modbus)
+// mode "serial" = Scanner ต่อ COM port อ่านด้วย Web Serial ของเบราว์เซอร์ (ไม่ผ่าน Bridge, serialScanner.js)
 const scannerMode = (cfg) => cfg?.mode || "modbus";
+const isSerialMode = (cfg) => scannerMode(cfg) === "serial";
+const scannerReady = (cfg) => (isSerialMode(cfg) ? cfg?.usb_vendor_id != null || Boolean(cfg?.port_label) : Boolean(cfg?.modbus_host));
+const scannerAddrOf = (cfg) =>
+  !cfg ? ""
+    : isSerialMode(cfg) ? `COM ${serialPortLabel(cfg)} @${cfg.baud_rate || 9600}`
+      : scannerMode(cfg) === "tcp" ? `TCP ${cfg.modbus_host}:${cfg.tcp_port}`
+        : `Modbus ${cfg.modbus_host}:${cfg.modbus_port}`;
 // เครื่องสแกนต่อกับ PC หน้าไลน์ (network แยก) -> PC เครื่องนี้ต่อเอง ผ่านโปรแกรม MES Bridge
 // (tools/mes-bridge/start-mes-bridge.bat) เพราะเบราว์เซอร์ต่อ TCP / Modbus เองไม่ได้
 const BRIDGE_URL = "http://127.0.0.1:18080";
@@ -118,6 +129,7 @@ const bridgeRead = async (path, body) => {
 // ปิด connection เครื่องสแกนที่ Bridge ทันที (Keyence รับ client ได้จำกัด ถ้าไม่ปิดเครื่องอื่นต่อไม่ได้)
 // ใช้ keepalive ให้ส่งได้แม้กำลังปิดหน้า — ไม่สำเร็จก็ไม่เป็นไร Bridge ปิดเองเมื่อไม่มีใครใช้
 const bridgeDisconnect = (cfg) => {
+  if (isSerialMode(cfg)) return; // COM port เบราว์เซอร์เปิดเอง ไม่เกี่ยวกับ Bridge
   const port = scannerMode(cfg) === "tcp" ? Number(cfg?.tcp_port) : Number(cfg?.modbus_port ?? 502);
   const body = JSON.stringify(cfg?.modbus_host ? { host: cfg.modbus_host, port } : {});
   try {
@@ -128,7 +140,7 @@ const bridgeDisconnect = (cfg) => {
   }
 };
 
-const SOURCE_LABEL = { TCP: "จาก Keyence (TCP)", Modbus: "จาก Modbus", Scanner: "จาก Scanner" };
+const SOURCE_LABEL = { TCP: "จาก Keyence (TCP)", Modbus: "จาก Modbus", COM: "จาก Scanner (COM)", Scanner: "จาก Scanner" };
 const PASS_POPUP_MS = 300; // popup PASS หลังส่ง MES ผ่าน
 
 const EMPTY_MODBUS_FORM = {
@@ -142,6 +154,15 @@ const EMPTY_MODBUS_FORM = {
   word_count: 20,
   byte_order: "BE",
   clear_after_read: true,
+  // Scanner COM port (mode "serial")
+  baud_rate: 9600,
+  data_bits: 8,
+  parity: "none",
+  stop_bits: 1,
+  terminator: "auto",
+  usb_vendor_id: null,
+  usb_product_id: null,
+  port_label: "",
 };
 
 export default function MesUpdate({ isDarkMode = false }) {
@@ -553,10 +574,37 @@ export default function MesUpdate({ isDarkMode = false }) {
   );
 
   // อ่านเครื่องสแกน (ครั้งเดียวต่อรอบ ไม่ใช่ต่อ station)
-  const modbusReady = Boolean(modbusCfg?.modbus_host);
+  const modbusReady = scannerReady(modbusCfg);
   const hasLocked = locked.size > 0;
+
+  // Scanner COM port: เบราว์เซอร์เปิด port ค้างไว้ระหว่าง Lock / SN เข้าคิว ส่งทีละชิ้นตามลำดับ (ไม่ทิ้งชิ้นที่สแกนระหว่างส่ง)
+  const serialActive = Boolean(mesAuth) && modbusReady && hasLocked && isSerialMode(modbusCfg);
   useEffect(() => {
-    if (!mesAuth || !modbusReady || !hasLocked) return;
+    if (!serialActive) return;
+    let cancelled = false;
+    let queue = Promise.resolve();
+    const close = openSerialScanner(modbusCfgRef.current, {
+      onSn: (sn) => {
+        queue = queue
+          .then(async () => {
+            // กำลังส่งชิ้นอื่นอยู่ (เช่น ยิงลงช่องพิมพ์) -> รอให้เสร็จก่อน ไม่ทิ้ง SN นี้
+            while (!cancelled && sendingRef.current) await new Promise((r) => setTimeout(r, 100));
+            if (!cancelled) await routeScan(sn, "COM");
+          })
+          .catch(() => {});
+      },
+      onStatus: (s) => {
+        if (!cancelled) setModbusStatus(s);
+      },
+    });
+    return () => {
+      cancelled = true;
+      close(); // Unlock / ออกจากระบบ / เปลี่ยนการตั้งค่า / ปิดหน้า -> ปิด port ให้โปรแกรมอื่นใช้ได้
+    };
+  }, [serialActive, modbusCfg, routeScan]);
+
+  useEffect(() => {
+    if (!mesAuth || !modbusReady || !hasLocked || isSerialMode(modbusCfg)) return;
     let cancelled = false;
     let timer = null;
     tcpAfterRef.current = null; // เริ่มใหม่: ไม่ส่งค่าที่สแกนไว้ก่อน Lock
@@ -875,17 +923,28 @@ export default function MesUpdate({ isDarkMode = false }) {
 
   // TCP: after -1 = ขอค่าที่เคยได้รับทั้งหมด (ดูค่าล่าสุด) / Modbus: อ่าน register ตอนนี้
   // ทดสอบจาก PC เครื่องนี้ผ่าน MES Bridge (ทดสอบไม่ล้าง register)
-  const testScannerRequest = (form) =>
-    scannerMode(form) === "tcp"
+  // COM: waitMs 0 = เช็คแค่เปิด port ได้ (ตอนบันทึก) / ทดสอบ = รอสแกน 1 ครั้งไม่เกิน 10 วินาที
+  const testScannerRequest = (form, waitMs = 0) =>
+    isSerialMode(form)
+      ? hasLocked && isSerialMode(modbusCfg)
+        ? Promise.reject(new Error("COM port กำลังใช้งานอยู่ (มี station Lock) — Unlock ทุก station ก่อนทดสอบ"))
+        : testSerialScanner(form, waitMs)
+      : scannerMode(form) === "tcp"
       ? bridgeRead("/tcp/read", { host: form.modbus_host, port: Number(form.tcp_port), after: -1 })
       : bridgeRead("/modbus/read", { ...form, clear_after_read: false, close: true }); // ทดสอบเสร็จปิดทันที
 
   const testModbus = async () => {
     setTestResult({ loading: true });
     try {
-      const data = await testScannerRequest(modbusForm);
+      if (isSerialMode(modbusForm)) setTestResult({ loading: true, text: "เปิด COM port แล้ว — สแกน 1 ครั้งภายใน 10 วินาที..." });
+      const data = await testScannerRequest(modbusForm, 10000);
       if (scannerMode(modbusForm) === "tcp" && !hasLocked) bridgeDisconnect(modbusForm); // ทดสอบเสร็จปล่อยเครื่องสแกน
-      if (scannerMode(modbusForm) === "tcp") {
+      if (isSerialMode(modbusForm)) {
+        setTestResult({
+          ok: true,
+          text: data.sn ? `เชื่อมต่อได้ — ค่าที่สแกน: ${data.sn}` : "เปิด COM port ได้ — แต่ไม่ได้รับค่าใน 10 วินาที (เช็ค Baud / ตัวจบบรรทัด / scanner ตั้งเป็นโหมด COM)",
+        });
+      } else if (scannerMode(modbusForm) === "tcp") {
         const last = data.items?.[data.items.length - 1];
         setTestResult({
           ok: true,
@@ -959,11 +1018,7 @@ export default function MesUpdate({ isDarkMode = false }) {
     });
   };
 
-  const scannerAddr = modbusCfg
-    ? scannerMode(modbusCfg) === "tcp"
-      ? `TCP ${modbusCfg.modbus_host}:${modbusCfg.tcp_port}`
-      : `Modbus ${modbusCfg.modbus_host}:${modbusCfg.modbus_port}`
-    : "";
+  const scannerAddr = scannerAddrOf(modbusCfg);
 
   // ---------- styles ----------
   const card = isDarkMode ? "bg-[#1E293B] border-slate-700/60" : "bg-white border-gray-200";
@@ -1078,18 +1133,114 @@ export default function MesUpdate({ isDarkMode = false }) {
         {/* 2) Modbus ของเครื่อง (ตั้งครั้งเดียว) */}
         <form onSubmit={saveModbus} className={`rounded-2xl border p-4 space-y-3 ${card}`}>
           <div className={`text-sm font-bold ${textMain}`}>
-            2. การเชื่อมต่อเครื่องสแกน Keyence ของเครื่องนี้{" "}
+            2. การเชื่อมต่อเครื่องสแกนของเครื่องนี้{" "}
             {modbusCfg
-              ? <span className="text-emerald-500">
-                  — ใช้งานอยู่ {scannerMode(modbusCfg) === "tcp" ? `TCP ${modbusCfg.modbus_host}:${modbusCfg.tcp_port}` : `Modbus ${modbusCfg.modbus_host}:${modbusCfg.modbus_port}`}
-                </span>
+              ? <span className="text-emerald-500">— ใช้งานอยู่ {scannerAddrOf(modbusCfg)}</span>
               : <span className="text-gray-400">— ยังไม่ได้ตั้ง (ใช้สแกนลงช่องในหน้าเว็บได้)</span>}
           </div>
           <p className="text-[11px] text-gray-400">
             ตั้งครั้งเดียว ใช้กับทุก station ของเครื่องนี้ — สแกน 1 ครั้งส่งให้ทุก station ที่ Lock ตามลำดับ
-            <br />
-            PC เครื่องนี้เป็นตัวต่อเครื่องสแกนเอง ต้องเปิดโปรแกรม <b>MES Bridge</b> (start-mes-bridge.bat) ค้างไว้
           </p>
+          {/* ประเภทอุปกรณ์: กล้อง Keyence (ผ่าน MES Bridge) / Scanner ต่อ COM port (เบราว์เซอร์อ่านเอง) */}
+          <div className="flex flex-wrap gap-2">
+            {[
+              ["camera", "📷 กล้อง Keyence"],
+              ["serial", "🔌 Scanner (COM port)"],
+            ].map(([key, text]) => {
+              const active = key === "serial" ? isSerialMode(modbusForm) : !isSerialMode(modbusForm);
+              return (
+                <button key={key} type="button"
+                  onClick={() => {
+                    if (active) return;
+                    setModbusForm({ ...modbusForm, mode: key === "serial" ? "serial" : "tcp" });
+                    setTestResult(null);
+                  }}
+                  className={`px-4 py-2 rounded-xl text-sm font-bold border ${active
+                    ? "bg-indigo-600 border-indigo-600 text-white" : "border-gray-400/40 text-gray-400"}`}>
+                  {text}
+                </button>
+              );
+            })}
+          </div>
+          {isSerialMode(modbusForm) && (
+            <div className="space-y-3">
+              {!serialSupported() && (
+                <div className="text-xs p-2 rounded-lg border text-rose-500 border-rose-500/30 font-bold">{serialUnsupportedReason()}</div>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" className={btnGhost} disabled={!serialSupported()}
+                  onClick={async () => {
+                    try {
+                      const picked = await pickSerialPort();
+                      setModbusForm((f) => ({ ...f, ...picked }));
+                      setTestResult(null);
+                    } catch (err) {
+                      setTestResult({ ok: false, text: err.message });
+                    }
+                  }}>
+                  เลือก COM port
+                </button>
+                <span className={`text-xs font-bold ${scannerReady(modbusForm) ? textMain : "text-gray-400"}`}>
+                  {scannerReady(modbusForm) ? serialPortLabel(modbusForm) : "ยังไม่ได้เลือก port"}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                <div>
+                  <label className={label}>Baud rate</label>
+                  <select className={`${input} w-full`} value={modbusForm.baud_rate}
+                    onChange={(e) => setModbusForm({ ...modbusForm, baud_rate: Number(e.target.value) })}>
+                    {SERIAL_BAUDS.map((b) => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={label}>Data bits</label>
+                  <select className={`${input} w-full`} value={modbusForm.data_bits}
+                    onChange={(e) => setModbusForm({ ...modbusForm, data_bits: Number(e.target.value) })}>
+                    <option value={8}>8</option>
+                    <option value={7}>7</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={label}>Parity</label>
+                  <select className={`${input} w-full`} value={modbusForm.parity}
+                    onChange={(e) => setModbusForm({ ...modbusForm, parity: e.target.value })}>
+                    <option value="none">None</option>
+                    <option value="even">Even</option>
+                    <option value="odd">Odd</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={label}>Stop bits</label>
+                  <select className={`${input} w-full`} value={modbusForm.stop_bits}
+                    onChange={(e) => setModbusForm({ ...modbusForm, stop_bits: Number(e.target.value) })}>
+                    <option value={1}>1</option>
+                    <option value={2}>2</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={label}>ตัวจบ SN</label>
+                  <select className={`${input} w-full`} value={modbusForm.terminator}
+                    onChange={(e) => setModbusForm({ ...modbusForm, terminator: e.target.value })}>
+                    <option value="auto">Auto (CR / LF)</option>
+                    <option value="CR">CR</option>
+                    <option value="LF">LF</option>
+                    <option value="CRLF">CR+LF</option>
+                  </select>
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-400">
+                ใช้ Google Chrome / Microsoft Edge — ไม่ต้องเปิด MES Bridge / Scanner ต้องตั้งเป็นโหมด <b>USB-COM (Virtual COM)</b> ไม่ใช่โหมดคีย์บอร์ด
+                <br />
+                เลือก port ครั้งแรกครั้งเดียว เบราว์เซอร์จำไว้ / เปิด port ระหว่าง Lock station เท่านั้น (เปิดหน้า /MES ได้ทีละแท็บ)
+              </p>
+            </div>
+          )}
+          {!isSerialMode(modbusForm) && (
+          <p className="text-[11px] text-gray-400">
+            PC เครื่องนี้เป็นตัวต่อกล้องเอง ต้องเปิดโปรแกรม <b>MES Bridge</b> (start-mes-bridge.bat) ค้างไว้
+          </p>
+          )}
+          {!isSerialMode(modbusForm) && (
           <div className="flex flex-wrap gap-2">
             {[
               ["tcp", "TCP data port (แนะนำ)"],
@@ -1103,6 +1254,7 @@ export default function MesUpdate({ isDarkMode = false }) {
               </button>
             ))}
           </div>
+          )}
           {scannerMode(modbusForm) === "tcp" && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="col-span-2">
@@ -1173,7 +1325,7 @@ export default function MesUpdate({ isDarkMode = false }) {
           {testResult && (
             <div className={`text-xs p-2 rounded-lg border ${testResult.loading ? "text-gray-400 border-gray-500/30"
               : testResult.ok ? "text-emerald-500 border-emerald-500/30" : "text-rose-500 border-rose-500/30"}`}>
-              {testResult.loading ? "กำลังอ่าน..." : (
+              {testResult.loading ? testResult.text || "กำลังอ่าน..." : (
                 <>
                   <div className="font-bold break-all">{testResult.text}</div>
                   {testResult.raw && <div className="text-[10px] opacity-70 break-all">raw: [{testResult.raw.join(", ")}]</div>}
@@ -1182,8 +1334,12 @@ export default function MesUpdate({ isDarkMode = false }) {
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            <button type="submit" className={btnPrimary} disabled={saving}>{saving ? "กำลังทดสอบ..." : "ทดสอบแล้วบันทึก"}</button>
-            <button type="button" className={btnGhost} onClick={testModbus} disabled={!modbusForm.modbus_host}>ทดสอบเชื่อมต่อ</button>
+            <button type="submit" className={btnPrimary}
+              disabled={saving || (isSerialMode(modbusForm) && (!serialSupported() || !scannerReady(modbusForm)))}>
+              {saving ? "กำลังทดสอบ..." : "ทดสอบแล้วบันทึก"}
+            </button>
+            <button type="button" className={btnGhost} onClick={testModbus}
+              disabled={!scannerReady(modbusForm) || testResult?.loading}>ทดสอบเชื่อมต่อ</button>
             {modbusCfg && (
               <button type="button" className="px-3 py-2 rounded-xl text-xs font-bold border border-rose-500/40 text-rose-500 hover:bg-rose-500/10"
                 onClick={disableModbus}>

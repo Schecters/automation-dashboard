@@ -147,6 +147,10 @@ git push
     เปิดด้วย `start-mes-bridge.bat`, ต้องมี Node.js ไม่ต้องลง package) ฟังที่ `http://127.0.0.1:18080` หน้าเว็บเรียกตรง
     (เครื่องสแกนอยู่ network ของ PC นั้น เช่น 192.168.1.x server เข้าไม่ถึง / เบราว์เซอร์ต่อ TCP เองไม่ได้)
     2 แบบ: TCP data port เช่น 9004 (Keyence SR) หรือ Modbus TCP — server ไม่ได้ต่อเครื่องสแกนแล้ว
+    **Scanner COM port** (หน้าตั้งค่าเลือก "กล้อง Keyence" / "Scanner (COM port)"): เบราว์เซอร์อ่าน COM เองด้วย Web Serial
+    (`src/components/mes/serialScanner.js`, ไม่ใช้ Bridge, Chrome / Edge เท่านั้น, ต้องเป็น https ที่เบราว์เซอร์ถือว่า secure context)
+    ค่าเก็บใน `mesModbus` `{ mode: "serial", baud_rate, data_bits, parity, stop_bits, terminator, usb_vendor_id, usb_product_id }`
+    เบราว์เซอร์ไม่บอกชื่อ COM → เลือก port ครั้งแรกผ่าน popup แล้วจำด้วย USB VID / PID / เปิด port เฉพาะระหว่าง Lock (ทีละแท็บ) หลุด = ลองใหม่ทุก 3 วิ
     ถ้าเปลี่ยน URL เว็บ ต้องเพิ่มใน `MES_BRIDGE_ORIGINS` ของ Bridge
     **relay** (`"relay": { scanner, listenPort: 9005, allow }` ใน `mes-bridge.config.json`): โปรแกรมอื่น (เช่น Themister_Real) ต่อ Keyence ผ่าน Bridge
     ค่าเริ่มต้นส่ง QR ให้ทันที (Themister_Real รอ SN แค่ 10 วิ กักไว้ = SN เหลื่อมชิ้น) / `holdUntilWeb: true` = รอหน้าเว็บส่ง MES ไม่เกิน 8 วิหลังสแกน
