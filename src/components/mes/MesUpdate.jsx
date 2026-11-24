@@ -37,10 +37,15 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const POLL_INTERVAL_MS = 700;
 const STAFF_ROLES = ["admin", "me"];
 
+// ค่าในเบราว์เซอร์ผิดรูปแบบ (เช่นแก้มือ / รุ่นเก่า) -> ใช้ค่าเริ่มต้น ไม่ให้ทั้งหน้าพัง
 const loadJson = (key, fallback) => {
   try {
     const v = JSON.parse(localStorage.getItem(key));
-    return v ?? fallback;
+    if (v === null || v === undefined) return fallback;
+    if (Array.isArray(fallback)) return Array.isArray(v) ? v : fallback;
+    if (typeof fallback === "string") return typeof v === "string" ? v : fallback;
+    if (fallback === null) return typeof v === "object" && !Array.isArray(v) ? v : null;
+    return v;
   } catch {
     return fallback;
   }
@@ -1337,7 +1342,7 @@ export default function MesUpdate({ isDarkMode = false }) {
                         : exams.error
                           ? <span className="text-rose-500">{exams.error}</span>
                           : exams.length === 0
-                            ? "ไม่มีข้อสอบบังคับ (ผ่านทุกคน)"
+                            ? "ไม่มีข้อสอบบังคับ — เช็คแค่เคยทำข้อสอบ"
                             : exams.map((e) => `${String(e.file_name || e.config_key).replace(".xlsx", "")} ≥ ${Number(e.min_score) || 80}`).join(", ")}
                     </div>
                   </div>

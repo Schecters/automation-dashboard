@@ -136,7 +136,9 @@ git push
     ฟังก์ชัน `findOperatorExams` ใน `src/api/lib/operatorExams.js`, เรียกตรงได้ที่ `/api/operator-exam-check?employee_id=`)
     ถ้าเครื่องนั้นตั้ง **เกณฑ์ความสามารถ** (`mesQualStations` = Line / Station จาก MES, ข้อสอบตั้งในหน้า Lines & Station) operator ต้องผ่านข้อสอบบังคับ + คะแนนขั้นต่ำ
     ของ **ทุก** station ที่ตั้ง (`checkOperatorQualification` ใน `operatorExams.js`, เกณฑ์จาก `automation_lines.station_exams`) — ไม่ตั้ง = เช็คแบบเดิม
-    ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40
+    station ที่ตั้งเกณฑ์แต่ไม่มีข้อสอบบังคับเลย = ต้องเคยทำข้อสอบอย่างน้อย 1 ไฟล์ (กัน login ด้วยรหัสอะไรก็ได้)
+    ได้ token แยก (`kind: mes_operator`) หมดอายุ 07:40 / 19:40 (login ก่อนเปลี่ยนกะไม่ถึง 15 นาที = ใช้ได้ถึงรอบถัดไป)
+    token dashboard ที่ค้างบนเครื่องหน้าไลน์หลุด / ถูกเตะ = ล้างเฉย ๆ ไม่พาออกจากหน้า /MES (`AppRoutes.jsx` performLogout)
   - เรียก MES ที่ `MES_API_BASE` (default `http://10.204.212.22:5207`) ผ่าน `src/api/lib/mesClient.js`
     ดู Line / Station / WO (lineinfo, molist) ใช้รหัสกลาง `MES_QUERY_EMP_NO` (default 86727533) / routing-update ใช้รหัส operator ที่ login
     ส่งแต่ละ station: POST /api/mes/tdc/routing-check (ต้อง OK) แล้วค่อย POST /api/mes/tdc/typed/routing-update (testData "")

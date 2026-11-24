@@ -46,7 +46,7 @@ export default function AppRoutes() {
       if (isLoggingOut) return;
       isLoggingOut = true;
 
-      if (msg) alert(msg);
+      if (msg && !window.location.pathname.toUpperCase().startsWith("/MES")) alert(msg);
 
       localStorage.removeItem("token");
       localStorage.removeItem("sessionToken");
@@ -57,6 +57,13 @@ export default function AppRoutes() {
 
       if (socket.connected) {
         socket.disconnect();
+      }
+
+      // หน้า /MES (เครื่องหน้าไลน์) ใช้ login operator แยก — token dashboard ของ ME/admin ที่ค้างไว้หลุด
+      // ไม่ต้องพาออกจากหน้า /MES (เดิมเด้งไปหน้า login ของ dashboard ต้องพิมพ์ URL /MES ใหม่)
+      if (window.location.pathname.toUpperCase().startsWith("/MES")) {
+        isLoggingOut = false;
+        return;
       }
 
       // 🔄 ใช้ replace เพื่อล้าง History Stack ป้องกันการกดย้อนกลับ

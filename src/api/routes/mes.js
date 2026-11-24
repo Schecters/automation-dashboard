@@ -25,6 +25,9 @@ const router = express.Router();
 const SHIFT_CUTOFFS = [7 * 60 + 40, 19 * 60 + 40]; // 07:40, 19:40 (นาทีของวัน เวลาไทย)
 const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000; // ไทยไม่มี DST
 
+// login ใกล้เวลาเปลี่ยนกะเกินนี้ -> token ใช้ได้ถึงรอบถัดไป (ไม่งั้นถูก logout แทบทันที)
+const LOGIN_GRACE_MS = 15 * 60 * 1000;
+
 // เวลาเปลี่ยนกะถัดไป (07:40 หรือ 19:40 เวลาไทย) ที่มาหลังเวลานี้
 export const nextShiftCutoff = (now = new Date()) => {
   const bkk = new Date(now.getTime() + BANGKOK_OFFSET_MS); // อ่านค่า UTC ของ bkk = เวลาไทย
@@ -106,6 +109,7 @@ router.post('/api/mes/operator-login', async (req, res) => {
   try {
     let name = '';
     let examsSummary = '';
+    let qualExamCount = 0; // จำนวนข้อสอบบังคับรวมของ station ที่ตั้งเกณฑ์
     if (qualStations.length > 0) {
       // เครื่องนี้ตั้งเกณฑ์ไว้ -> ต้องผ่านข้อสอบบังคับของทุก Line + Station ที่ตั้ง
       const qual = await checkOperatorQualification(employeeId, qualStations);
@@ -117,9 +121,13 @@ router.post('/api/mes/operator-login', async (req, res) => {
         return res.status(401).json({ success: false, message: `ไม่ผ่านเกณฑ์ ${reasons.join(' | ')}` });
       }
       name = qual.name;
+      qualExamCount = qual.results.reduce((n, r) => n + r.exams.length, 0);
       examsSummary = qual.results.map((r) => `${r.line}/${r.station} ผ่าน`).join(' / ');
-    } else {
-      // ยังไม่ตั้งเกณฑ์: แค่ต้องเคยทำข้อสอบ (มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดไฟล์หนึ่ง)
+    }
+    // ไม่ตั้งเกณฑ์ หรือ station ที่ตั้งไม่มีข้อสอบบังคับเลย (เช่นยังไม่ได้ผูกข้อสอบกับชื่อ Station ของ MES)
+    // -> อย่างน้อยต้องเคยทำข้อสอบ (เดิมกรณีนี้ใครก็ login ได้ แม้รหัสที่ไม่มีอยู่จริง)
+    if (qualExamCount === 0) {
+      // มีรหัสในไฟล์ Excel คะแนนสอบไฟล์ใดไฟล์หนึ่ง
       const check = await findOperatorExams(employeeId);
       if (!check.found) {
         const unavailable = check.checked > 0 && check.failed === check.checked;
@@ -129,10 +137,13 @@ router.post('/api/mes/operator-login', async (req, res) => {
         });
       }
       name = check.name;
-      examsSummary = check.exams.map((e) => e.exam_name).join(' / ');
+      const examNames = check.exams.map((e) => e.exam_name).join(' / ');
+      examsSummary = qualStations.length > 0 ? `${examsSummary} (station ที่ตั้งไม่มีข้อสอบบังคับ: เคยทำ ${examNames})` : examNames;
     }
     const operator = { employee_id: employeeId, name: name || '' };
-    const expiresAt = nextShiftCutoff();
+    // login ใกล้เปลี่ยนกะ (เหลือไม่ถึง 15 นาที) -> ใช้ได้ถึงรอบถัดไป
+    let expiresAt = nextShiftCutoff();
+    if (expiresAt.getTime() - Date.now() < LOGIN_GRACE_MS) expiresAt = nextShiftCutoff(new Date(expiresAt.getTime() + 1000));
     const expiresInSec = Math.max(60, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
     const token = jwt.sign({ kind: MES_OPERATOR_KIND, ...operator }, JWT_SECRET, { expiresIn: expiresInSec });
 
