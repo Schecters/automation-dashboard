@@ -5,7 +5,7 @@ import { JWT_SECRET, MES_QUERY_EMP_NO } from '../lib/config.js';
 import { getClientIp } from '../lib/clientIp.js';
 import { getLineInfo, getMoList, buildRoutingRow, routingCheck, routingUpdate, buildInputPayload, inputUpdate, buildDefectTestData, buildRoutingInputPayload, routingInput, MesError, ROUTING_RESULTS } from '../lib/mesClient.js';
 import { internalFetch, InternalServiceError } from '../lib/internalKey.js';
-import { appendRouteLog, appendLoginLog, readRouteLogs, readShiftSummary } from '../lib/mesLog.js';
+import { appendRouteLog, appendLoginLog, readRouteLogs, readShiftSummary, readOutputSummary, OUTPUT_MAX_DAYS } from '../lib/mesLog.js';
 import { findOperatorExams, checkOperatorQualification } from '../lib/operatorExams.js';
 import { getWorkOrderProgress, WmsError } from '../lib/wmsClient.js';
 import { authenticateToken, authenticateMesOperator, MES_OPERATOR_KIND } from '../middleware/auth.js';
@@ -355,7 +355,11 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
       success,
       mes_response: `${row}${testData && !failPayload ? ` | testData ${testData}` : ''} => ${responseText}`.slice(0, 2000),
     });
-    io.emit('mes_updated', { terminal, success });
+    // หน้า /MES (โหลดประวัติใหม่) + หน้า MES Output ใน Home (บวกยอด OK / NG ทันที) — ไม่ส่ง SN / รหัสพนักงาน
+    io.emit('mes_updated', {
+      terminal, success, result, at: new Date().toISOString(),
+      line, group: st.GROUP_NAME, station: st.STATION_NAME, model: moRow.MODEL_NAME, mo,
+    });
 
     // ประวัติงานเสียลง Database (ผ่าน service data) — บันทึกไม่ได้ไม่ทำให้การส่ง MES ล้ม
     if (defect) {
@@ -421,6 +425,26 @@ router.get('/api/mes/wo-progress', authenticateMesOrStaff, async (req, res) => {
     res.json({ success: true, data: await getWorkOrderProgress(mo) });
   } catch (err) {
     res.status(err instanceof WmsError ? err.status : 500).json({ success: false, message: err.message });
+  }
+});
+
+// ยอด OK / NG ของทุกเครื่อง แยก Line / Station / วัน-กะ / Model (หน้า MES Output ใน Home — token dashboard)
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+router.get('/api/mes/output-summary', authenticateToken, async (req, res) => {
+  const from = String(req.query.from || '');
+  const to = String(req.query.to || '');
+  if (!DATE_RE.test(from) || !DATE_RE.test(to) || Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to)) || from > to) {
+    return res.status(400).json({ success: false, message: 'วันที่ไม่ถูกต้อง (YYYY-MM-DD และวันเริ่มต้องไม่เกินวันสิ้นสุด)' });
+  }
+  if ((Date.parse(to) - Date.parse(from)) / 86400000 + 1 > OUTPUT_MAX_DAYS) {
+    return res.status(400).json({ success: false, message: `เลือกช่วงได้ไม่เกิน ${OUTPUT_MAX_DAYS} วัน` });
+  }
+  const shift = ['day', 'night'].includes(req.query.shift) ? req.query.shift : '';
+  try {
+    res.json({ success: true, data: await readOutputSummary({ from, to, line: text(req.query.line, 100) || '', shift }) });
+  } catch (err) {
+    console.error('Read MES Output Summary Error:', err);
+    res.status(500).json({ success: false, message: 'อ่านยอด OK / NG ไม่สำเร็จ' });
   }
 });
 

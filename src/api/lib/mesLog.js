@@ -55,7 +55,8 @@ const parseCsvLine = (line) => {
 // เขียนต่อท้ายไฟล์ทีละบรรทัด (คิวเดียว กันบรรทัดซ้อนกัน)
 let writeQueue = Promise.resolve();
 const appendRow = (fileName, columns, row) => {
-  writeQueue = writeQueue.then(async () => {
+  // ต่อจากงานก่อนหน้าเสมอ แม้งานก่อนหน้าเขียนไม่ได้ (เดิมแถวที่รอคิวอยู่หายไปด้วย)
+  const task = writeQueue.catch(() => {}).then(async () => {
     await fs.mkdir(MES_LOG_DIR, { recursive: true });
     const file = path.join(MES_LOG_DIR, fileName);
     let isNew = false;
@@ -67,10 +68,10 @@ const appendRow = (fileName, columns, row) => {
     const header = isNew ? `﻿${columns.map(csvCell).join(',')}\r\n` : '';
     await fs.appendFile(file, `${header}${columns.map((c) => csvCell(row[c])).join(',')}\r\n`, 'utf8');
   });
+  writeQueue = task;
   // เขียนไม่ได้ (เช่น ไม่มีไดรฟ์ D:) ไม่ให้ทำให้การส่ง MES ล้ม — แจ้งใน console
-  return writeQueue.catch((err) => {
+  return task.catch((err) => {
     console.error(`❌ เขียนไฟล์ log MES ไม่ได้ (${MES_LOG_DIR}):`, err.message);
-    writeQueue = Promise.resolve();
     throw err;
   });
 };
@@ -123,6 +124,80 @@ export const readShiftSummary = async ({ terminal, since }) => {
     }
   }
   return { total, stations: [...byStation.values()] };
+};
+
+// ---------- ยอด OK / NG ตาม Line / Station (หน้า MES Output ใน Home) ----------
+// วันทำงาน + กะ จากเวลาไทย "YYYY-MM-DD HH:MM:SS": 07:40-19:40 = กะเช้าของวันนั้น / 19:40-07:40 = กะดึก นับเป็นวันที่เริ่มกะ
+const DAY_START_MIN = 7 * 60 + 40;
+const NIGHT_START_MIN = 19 * 60 + 40;
+const addDays = (date, n) => new Date(Date.parse(`${date}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+export const workShiftOf = (bkkTime) => {
+  const t = String(bkkTime);
+  const date = t.slice(0, 10);
+  const minutes = Number(t.slice(11, 13)) * 60 + Number(t.slice(14, 16));
+  if (minutes >= DAY_START_MIN && minutes < NIGHT_START_MIN) return { date, shift: 'day' };
+  return { date: minutes < DAY_START_MIN ? addDays(date, -1) : date, shift: 'night' };
+};
+export const OUTPUT_MAX_DAYS = 93;
+
+// from / to = วันทำงาน YYYY-MM-DD (รวมทั้งสองวัน) / line, shift (day | night) = กรองเพิ่ม (ว่าง = ทั้งหมด)
+// นับเฉพาะที่ส่ง MES สำเร็จ: OK = PASS / INPUT, NG = FAIL (แบบเดียวกับกล่อง OK / NG หน้า /MES)
+export const readOutputSummary = async ({ from, to, line = '', shift = '' }) => {
+  const total = { ok: 0, ng: 0 };
+  const lines = new Map(); // line -> { line, ok, ng, stations: Map }
+  const days = new Map(); // date|shift|line|station
+  const models = new Map(); // line|model|mo
+  const bump = (obj, field) => {
+    obj[field] += 1;
+    return obj;
+  };
+  // กะดึกของวันสุดท้ายจบเช้าวันถัดไป -> อ่านไฟล์ถึง to + 1
+  const lastFile = addDays(to, 1);
+  for (let date = from; date <= lastFile; date = addDays(date, 1)) {
+    let content;
+    try {
+      content = await fs.readFile(path.join(MES_LOG_DIR, `${date}.csv`), 'utf8');
+    } catch {
+      continue;
+    }
+    const rows = content.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean).slice(1);
+    for (const raw of rows) {
+      const cells = parseCsvLine(raw);
+      if (cells.length < ROUTE_COLUMNS.length - 1) continue; // บรรทัดที่เขียนไม่ครบ
+      const row = Object.fromEntries(ROUTE_COLUMNS.map((c, idx) => [c, cells[idx] ?? '']));
+      if (row.success !== 'Y' || !row.line || !row.station) continue;
+      const ws = workShiftOf(row.time);
+      if (ws.date < from || ws.date > to) continue;
+      if (line && row.line !== line) continue;
+      if (shift && ws.shift !== shift) continue;
+      const field = row.result === 'FAIL' ? 'ng' : 'ok';
+      bump(total, field);
+
+      if (!lines.has(row.line)) lines.set(row.line, { line: row.line, ok: 0, ng: 0, stations: new Map() });
+      const l = bump(lines.get(row.line), field);
+      if (!l.stations.has(row.station)) l.stations.set(row.station, { station: row.station, group: row.group, ok: 0, ng: 0 });
+      bump(l.stations.get(row.station), field);
+
+      const dk = `${ws.date}|${ws.shift}|${row.line}|${row.station}`;
+      if (!days.has(dk)) days.set(dk, { date: ws.date, shift: ws.shift, line: row.line, station: row.station, ok: 0, ng: 0 });
+      bump(days.get(dk), field);
+
+      const mk = `${row.line}|${row.model}|${row.mo}`;
+      if (!models.has(mk)) models.set(mk, { line: row.line, model: row.model, mo: row.mo, ok: 0, ng: 0 });
+      bump(models.get(mk), field);
+    }
+  }
+  const byName = (k) => (a, b) => String(a[k]).localeCompare(String(b[k]));
+  return {
+    total,
+    lines: [...lines.values()]
+      .sort(byName('line'))
+      .map((l) => ({ ...l, stations: [...l.stations.values()].sort(byName('station')) })),
+    days: [...days.values()].sort(
+      (a, b) => a.date.localeCompare(b.date) || a.shift.localeCompare(b.shift) || a.line.localeCompare(b.line) || a.station.localeCompare(b.station)
+    ),
+    models: [...models.values()].sort((a, b) => a.line.localeCompare(b.line) || b.ok + b.ng - (a.ok + a.ng)),
+  };
 };
 
 // ประวัติล่าสุดของเครื่อง (อ่านไฟล์วันนี้ + เมื่อวาน) ใหม่สุดก่อน

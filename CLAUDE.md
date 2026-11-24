@@ -88,7 +88,7 @@ git push
 | `excel/` | ExcelSearchContent, AutoTriggerExcel | `excelConfigs.js`, `excelGraph.js` |
 | `plc/` | StepCustom | `plc.js` |
 | `users/` | UserManagementContent, AuditLogContent | `users.js`, `auth.js` |
-| `mes/` | MesUpdate (+ `pages/MesLogin.jsx`) | `mes.js` + `lib/mesClient.js`, `lib/mesLog.js`, `lib/operatorExams.js` |
+| `mes/` | MesUpdate (+ `pages/MesLogin.jsx`), MesOutputContent (แท็บ MES Output ใน Home) | `mes.js` + `lib/mesClient.js`, `lib/mesLog.js`, `lib/operatorExams.js` |
 | `dashboard/` | OverallContent (ภาพรวม ดึงหลายเรื่อง), ApiDocContent (คู่มือ API) | หลายไฟล์ |
 | `defects/` | DefectCodeContent (อาการงานเสีย), DefectHistoryContent (ประวัติงานเสีย) | `defects.js` |
 | `common/` | NotificationBell, DarkModeToggle | `notifications.js` |
@@ -165,6 +165,9 @@ git push
     `update-route` รับ `defect_id` → station แบบ routing: routing-check → routing-update `...}FAIL}...` + testData / station แบบ input: FAIL ส่งที่ **routing-input** (`MES_ROUTING_INPUT_PATH`, default `/api/mes/tdc/typed/routing-input`, ไม่ต้อง routing-check)
     JSON `{ sn, mo, model, line, section, group, station, errorCode: รหัสอาการ, result: "FAIL", employeeId, barcodePrefix, barcodeLength, ..., testData }` (`buildRoutingInputPayload`)
     testData `[SN/FAIL];[รหัสอาการ/อาการ];[รหัสพนักงาน]` (`buildDefectTestData`) + บันทึก `defect_logs` (หน้าเว็บส่ง `fail_via_input: true`)
+  - **MES Output** (แท็บใน Home, `src/components/mes/MesOutputContent.jsx`): ยอด OK / NG ของทุกเครื่อง แยก Line / Station / วัน-กะ / Model
+    `GET /api/mes/output-summary?from=&to=&line=&shift=` (`readOutputSummary` ใน `mesLog.js`, นับจาก CSV เดียวกัน, ไม่เกิน 93 วัน)
+    real time: update-route ส่ง socket `mes_updated` `{ success, result, at, line, group, station, model, mo, terminal }` หน้านี้บวกยอดทันที
   - **Defect Code / Defect History** (แท็บใน Home): `src/api/routes/defects.js` อยู่ใน service data (5000) ตาราง `automation_lines.defect_codes`
     (station_name = ชื่อ Station ของ MES, defect_code, description, is_active) และ `automation_lines.defect_logs` / แก้อาการได้: admin, me, q
     service อื่นเรียก `/internal/defect-codes`, `/internal/defect-logs` ด้วย `internalFetch` (`lib/internalKey.js` — เฉพาะ 127.0.0.1 + key จาก JWT_SECRET)

@@ -23,6 +23,7 @@ const DailyCheckList = lazy(() => import("../components/pm/DailyCheckList"));
 const PmChecklistBuilder = lazy(() => import("../components/pm/PmChecklistBuilder"));
 const DefectCodeContent = lazy(() => import("../components/defects/DefectCodeContent"));
 const DefectHistoryContent = lazy(() => import("../components/defects/DefectHistoryContent"));
+const MesOutputContent = lazy(() => import("../components/mes/MesOutputContent"));
 
 // 🟢 Common
 import NotificationBell from "../components/common/NotificationBell";
@@ -245,6 +246,18 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         ),
       },
       {
+        id: "mes_output",
+        label: "MES Output",
+        category: "Production Control",
+        // ยอด OK / NG จากหน้า /MES แยก Line / Station (real time)
+        roles: ["admin", "me", "ie", "pd", "q", "view"],
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+        ),
+      },
+      {
         id: "defect_history",
         label: "Defect History",
         category: "Production Control",
@@ -442,6 +455,8 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         return <AuditLogContent isDarkMode={isDarkMode} />;
       case "defect_code":
         return <DefectCodeContent isDarkMode={isDarkMode} userRole={userRole} />;
+      case "mes_output":
+        return <MesOutputContent isDarkMode={isDarkMode} />;
       case "defect_history":
         return <DefectHistoryContent isDarkMode={isDarkMode} />;
       case "excel_search":
