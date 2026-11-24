@@ -5,6 +5,7 @@ import { socket } from "../../socket";
 //  - ยอดตั้งต้น: GET /api/mes/output-summary (นับจากไฟล์ CSV ของ service MES, เฉพาะที่ส่ง MES สำเร็จ)
 //  - real time: /MES ส่งเสร็จ -> server ส่ง socket "mes_updated" -> บวกยอดทันที
 //  - วันทำงาน / กะ: 07:40-19:40 = กะเช้า / 19:40-07:40 = กะดึก นับเป็นวันที่เริ่มกะ (เหมือน API)
+//  - ไม่มียอดรวมข้าม station (ชิ้นเดียวกันยิงหลาย station = นับซ้ำ) ดูทีละ station เท่านั้น
 const API_URL = "/api";
 const RELOAD_MS = 5 * 60 * 1000; // โหลดใหม่ทั้งชุดกันคลาดเคลื่อน
 const FLASH_MS = 1500;
@@ -56,11 +57,11 @@ const applyEvent = (data, ev, ws) => {
     : [...data.days, inc({ date: ws.date, shift: ws.shift, line: ev.line, station: ev.station, ok: 0, ng: 0 })];
   days = [...days].sort((a, b) => dayKey(a).localeCompare(dayKey(b)));
 
-  const modelKey = (m) => `${m.line}|${m.model}|${m.mo}`;
-  const evModel = `${ev.line}|${ev.model || ""}|${ev.mo || ""}`;
+  const modelKey = (m) => `${m.line}|${m.station}|${m.model}|${m.mo}`;
+  const evModel = `${ev.line}|${ev.station}|${ev.model || ""}|${ev.mo || ""}`;
   const models = data.models.some((m) => modelKey(m) === evModel)
     ? data.models.map((m) => (modelKey(m) === evModel ? inc(m) : m))
-    : [...data.models, inc({ line: ev.line, model: ev.model || "", mo: ev.mo || "", ok: 0, ng: 0 })];
+    : [...data.models, inc({ line: ev.line, station: ev.station, model: ev.model || "", mo: ev.mo || "", ok: 0, ng: 0 })];
 
   return { total: inc(data.total), lines, days, models };
 };
@@ -157,14 +158,11 @@ export default function MesOutputContent({ isDarkMode = false }) {
       head = ["วันที่", "กะ", "Line", "Station", "OK", "NG", "รวม", "Yield"];
       body = data.days.map((d) => [d.date, SHIFT_LABEL[d.shift], d.line, d.station, d.ok, d.ng, d.ok + d.ng, pct(d.ok, d.ng)]);
     } else if (view === "model") {
-      head = ["Line", "Model", "WO", "OK", "NG", "รวม", "Yield"];
-      body = data.models.map((m) => [m.line, m.model, m.mo, m.ok, m.ng, m.ok + m.ng, pct(m.ok, m.ng)]);
+      head = ["Line", "Station", "Model", "WO", "OK", "NG", "รวม", "Yield"];
+      body = data.models.map((m) => [m.line, m.station, m.model, m.mo, m.ok, m.ng, m.ok + m.ng, pct(m.ok, m.ng)]);
     } else {
       head = ["Line", "Station", "OK", "NG", "รวม", "Yield"];
-      body = data.lines.flatMap((l) => [
-        ...l.stations.map((s) => [l.line, s.station, s.ok, s.ng, s.ok + s.ng, pct(s.ok, s.ng)]),
-        [l.line, "รวม Line", l.ok, l.ng, l.ok + l.ng, pct(l.ok, l.ng)],
-      ]);
+      body = data.lines.flatMap((l) => l.stations.map((s) => [l.line, s.station, s.ok, s.ng, s.ok + s.ng, pct(s.ok, s.ng)]));
     }
     const csv = "﻿" + [head, ...body].map((r) => r.map(esc).join(",")).join("\r\n");
     const a = document.createElement("a");
@@ -188,15 +186,8 @@ export default function MesOutputContent({ isDarkMode = false }) {
   const num = `${td} text-right tabular-nums font-bold`;
   const rowBorder = isDarkMode ? "border-slate-700/50" : "border-gray-100";
   const set = (k) => (e) => setFilters({ ...filters, [k]: e.target.value });
-  const { ok, ng } = data.total;
   const lineOptions = [...new Set([...data.lines.map((l) => l.line), applied.line].filter(Boolean))].sort();
 
-  const statBox = (label, value, cls) => (
-    <div className={`rounded-2xl border p-4 ${card}`}>
-      <div className="text-xs font-bold text-gray-400">{label}</div>
-      <div className={`text-4xl font-black tabular-nums mt-1 ${cls}`}>{value}</div>
-    </div>
-  );
   const yieldCls = (o, n) => (o + n === 0 ? "text-gray-400" : o / (o + n) >= 0.98 ? "text-emerald-500" : o / (o + n) >= 0.9 ? "text-amber-500" : "text-rose-500");
 
   return (
@@ -254,13 +245,6 @@ export default function MesOutputContent({ isDarkMode = false }) {
 
       {error && <div className="px-4 py-2 rounded-xl text-sm font-bold bg-rose-500/15 text-rose-500">{error}</div>}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {statBox("OK", fmt(ok), "text-emerald-500")}
-        {statBox("NG", fmt(ng), "text-rose-500")}
-        {statBox("รวม", fmt(ok + ng), textMain)}
-        {statBox("Yield", pct(ok, ng), yieldCls(ok, ng))}
-      </div>
-
       <div className={`rounded-2xl border ${card}`}>
         <div className={`flex gap-1 p-2 border-b ${rowBorder}`}>
           {[["station", "แยก Line / Station"], ["day", "แยกวัน / กะ"], ["model", "แยก Model / WO"]].map(([k, t]) => (
@@ -284,12 +268,12 @@ export default function MesOutputContent({ isDarkMode = false }) {
                 </tr>
               </thead>
               <tbody>
-                {data.lines.map((l) => [
-                  ...l.stations.map((s, idx) => {
+                {data.lines.map((l) =>
+                  l.stations.map((s, idx) => {
                     const flashing = flash[`${l.line}|${s.station}`];
                     return (
                       <tr key={`${l.line}|${s.station}`}
-                        className={`border-b transition-colors duration-700 ${rowBorder} ${flashing ? "bg-emerald-500/20" : ""}`}>
+                        className={`transition-colors duration-700 ${idx === l.stations.length - 1 ? `border-b-2 ${isDarkMode ? "border-slate-600" : "border-gray-200"}` : `border-b ${rowBorder}`} ${flashing ? "bg-emerald-500/20" : ""}`}>
                         <td className={`${td} font-bold text-blue-500`}>{idx === 0 ? l.line : ""}</td>
                         <td className={`${td} ${textMain}`}>{s.station}</td>
                         <td className={`${num} text-emerald-500`}>{fmt(s.ok)}</td>
@@ -298,16 +282,8 @@ export default function MesOutputContent({ isDarkMode = false }) {
                         <td className={`${num} ${yieldCls(s.ok, s.ng)}`}>{pct(s.ok, s.ng)}</td>
                       </tr>
                     );
-                  }),
-                  <tr key={`${l.line}|total`} className={`border-b-2 ${isDarkMode ? "border-slate-600 bg-slate-800/50" : "border-gray-200 bg-gray-50"}`}>
-                    <td className={td} />
-                    <td className={`${td} font-bold text-gray-400`}>รวม {l.line}</td>
-                    <td className={`${num} text-emerald-500`}>{fmt(l.ok)}</td>
-                    <td className={`${num} text-rose-500`}>{fmt(l.ng)}</td>
-                    <td className={`${num} ${textMain}`}>{fmt(l.ok + l.ng)}</td>
-                    <td className={`${num} ${yieldCls(l.ok, l.ng)}`}>{pct(l.ok, l.ng)}</td>
-                  </tr>,
-                ])}
+                  })
+                )}
               </tbody>
             </table>
           ) : view === "day" ? (
@@ -338,15 +314,16 @@ export default function MesOutputContent({ isDarkMode = false }) {
             <table className="w-full">
               <thead>
                 <tr className={`border-b text-left ${rowBorder}`}>
-                  <th className={th}>Line</th><th className={th}>Model</th><th className={th}>WO</th>
+                  <th className={th}>Line</th><th className={th}>Station</th><th className={th}>Model</th><th className={th}>WO</th>
                   <th className={`${th} text-right`}>OK</th><th className={`${th} text-right`}>NG</th>
                   <th className={`${th} text-right`}>รวม</th><th className={`${th} text-right`}>Yield</th>
                 </tr>
               </thead>
               <tbody>
                 {data.models.map((m) => (
-                  <tr key={`${m.line}|${m.model}|${m.mo}`} className={`border-b ${rowBorder}`}>
+                  <tr key={`${m.line}|${m.station}|${m.model}|${m.mo}`} className={`border-b ${rowBorder}`}>
                     <td className={`${td} font-bold text-blue-500`}>{m.line}</td>
+                    <td className={`${td} ${textMain}`}>{m.station}</td>
                     <td className={`${td} ${textMain}`}>{m.model || "-"}</td>
                     <td className={`${td} font-mono ${textMain}`}>{m.mo || "-"}</td>
                     <td className={`${num} text-emerald-500`}>{fmt(m.ok)}</td>
@@ -361,7 +338,7 @@ export default function MesOutputContent({ isDarkMode = false }) {
         </div>
       </div>
       <p className="text-[11px] text-gray-400">
-        นับจากประวัติการส่งของหน้า /MES เท่านั้น (โปรแกรมอื่นที่ยิง MES เองไม่รวม) · ยอดอัปเดตทันทีเมื่อมีการส่ง และโหลดใหม่ทุก 5 นาที
+        ยอดของแต่ละ station แยกกัน (ชิ้นเดียวกันยิงหลาย station จึงไม่รวมยอดข้าม station) · นับจากประวัติการส่งของหน้า /MES เท่านั้น (โปรแกรมอื่นที่ยิง MES เองไม่รวม) · ยอดอัปเดตทันทีเมื่อมีการส่ง และโหลดใหม่ทุก 5 นาที
       </p>
     </div>
   );

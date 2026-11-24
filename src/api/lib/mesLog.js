@@ -146,7 +146,7 @@ export const readOutputSummary = async ({ from, to, line = '', shift = '' }) => 
   const total = { ok: 0, ng: 0 };
   const lines = new Map(); // line -> { line, ok, ng, stations: Map }
   const days = new Map(); // date|shift|line|station
-  const models = new Map(); // line|model|mo
+  const models = new Map(); // line|station|model|mo (แยก station: ชิ้นเดียวกันผ่านหลาย station ห้ามรวมกัน)
   const bump = (obj, field) => {
     obj[field] += 1;
     return obj;
@@ -182,8 +182,8 @@ export const readOutputSummary = async ({ from, to, line = '', shift = '' }) => 
       if (!days.has(dk)) days.set(dk, { date: ws.date, shift: ws.shift, line: row.line, station: row.station, ok: 0, ng: 0 });
       bump(days.get(dk), field);
 
-      const mk = `${row.line}|${row.model}|${row.mo}`;
-      if (!models.has(mk)) models.set(mk, { line: row.line, model: row.model, mo: row.mo, ok: 0, ng: 0 });
+      const mk = `${row.line}|${row.station}|${row.model}|${row.mo}`;
+      if (!models.has(mk)) models.set(mk, { line: row.line, station: row.station, model: row.model, mo: row.mo, ok: 0, ng: 0 });
       bump(models.get(mk), field);
     }
   }
@@ -196,7 +196,9 @@ export const readOutputSummary = async ({ from, to, line = '', shift = '' }) => 
     days: [...days.values()].sort(
       (a, b) => a.date.localeCompare(b.date) || a.shift.localeCompare(b.shift) || a.line.localeCompare(b.line) || a.station.localeCompare(b.station)
     ),
-    models: [...models.values()].sort((a, b) => a.line.localeCompare(b.line) || b.ok + b.ng - (a.ok + a.ng)),
+    models: [...models.values()].sort(
+      (a, b) => a.line.localeCompare(b.line) || a.station.localeCompare(b.station) || b.ok + b.ng - (a.ok + a.ng)
+    ),
   };
 };
 
