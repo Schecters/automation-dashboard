@@ -745,6 +745,25 @@ export default function MesUpdate({ isDarkMode = false }) {
     }
   };
 
+  // ออกจากระบบ ME/Admin (กด "เสร็จ" ในหน้าตั้งค่า) — ครั้งหน้าที่เปิดตั้งค่าต้อง login ใหม่
+  //  token นี้เป็น token dashboard ที่เก็บในเครื่องด้วย (login dashboard ค้างไว้ / login จากหน้านี้บัญชีเดียวกัน) -> ล้างด้วย
+  //  ไม่งั้นเปิดตั้งค่าครั้งหน้าจะเข้าได้เลยโดยไม่ถามรหัส
+  const logoutStaff = () => {
+    const token = staff?.token;
+    setStaff(null);
+    setStationForm(null);
+    setShowSettings(false);
+    if (!token) return;
+    fetch(`${API_URL}/logout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ deviceId }),
+    }).catch(() => {});
+    if ((localStorage.getItem("token") || localStorage.getItem("sessionToken")) === token) {
+      ["token", "sessionToken", "user", "userRole", "employeeId", "userName"].forEach((k) => localStorage.removeItem(k));
+    }
+  };
+
   // ---------- เกณฑ์ความสามารถ operator (Line / Station จาก MES, ข้อสอบตั้งในหน้า Lines & Station ของ dashboard) ----------
   const fetchQualExams = async (q) => {
     try {
@@ -1032,8 +1051,8 @@ export default function MesUpdate({ isDarkMode = false }) {
           <div className="text-xs text-gray-400">
             ตั้งค่าโดย <span className="font-bold text-blue-400">{staff.name || "-"}</span> ({staff.role.toUpperCase()})
           </div>
-          <button type="button" className={btnPrimary} onClick={() => { setShowSettings(false); setStationForm(null); }}>
-            เสร็จ
+          <button type="button" className={btnPrimary} onClick={logoutStaff} title="ปิดหน้าตั้งค่าและออกจากระบบ ME / Admin">
+            เสร็จ (ออกจากระบบ ME / Admin)
           </button>
         </div>
 
