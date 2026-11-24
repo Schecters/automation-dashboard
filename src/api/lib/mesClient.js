@@ -71,9 +71,16 @@ const cleanField = (v) => String(v ?? '').replace(/[}\r\n\t]/g, '').trim();
 
 export const ROUTING_RESULTS = ['PASS', 'FAIL'];
 
-// SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS|FAIL}EMPNO}1  (ตามตัวอย่างจาก MES)
-export const buildRoutingRow = ({ sn, mo, model, line, section, group, station, empNo, result = 'PASS' }) =>
-  [
+// pTest_Data ของ ROUTING_UPDATE (คั่นด้วย "}"):
+//  1 SN 2 MO 3 MODEL 4 LINE 5 SECTION 6 GROUP 7 STATION 8 ErrorCode 9 Result 10 Emp
+//  11 Machine_No 12 Test_Program 13 ErrorDesc 14 SubProgram 15 SubVersion 16 JIG1 17 JIG2 18 JIG3 19 ErrorMark
+// PASS: SN}MO}MODEL}LINE}SECTION}GROUP}STATION}}PASS}EMPNO}1  (ตามตัวอย่างจาก MES)
+// FAIL: SN}MO}MODEL}LINE}SECTION}GROUP}STATION}รหัสอาการ}FAIL}EMPNO}1}}คำอธิบายอาการ
+//   ErrorCode หลายรหัสคั่น ";" (รวมไม่เกิน 200 ตัว, ต้องมีใน MES) / ErrorDesc ไม่ใส่ = MES สร้างจาก ErrorCode
+export const buildRoutingRow = ({ sn, mo, model, line, section, group, station, empNo, result = 'PASS', errorCode = '', errorDesc = '' }) => {
+  const r = ROUTING_RESULTS.includes(result) ? result : 'PASS';
+  const isFail = r === 'FAIL';
+  const fields = [
     cleanField(sn),
     cleanField(mo),
     cleanField(model),
@@ -81,11 +88,15 @@ export const buildRoutingRow = ({ sn, mo, model, line, section, group, station, 
     cleanField(section),
     cleanField(group),
     cleanField(station),
-    '',
-    ROUTING_RESULTS.includes(result) ? result : 'PASS',
+    isFail ? cleanField(errorCode).slice(0, 200) : '',
+    r,
     cleanField(empNo),
     '1',
-  ].join('}');
+  ];
+  const desc = isFail ? cleanField(errorDesc) : '';
+  if (desc) fields.push('', desc); // 12 Test_Program (ว่าง), 13 ErrorDesc
+  return fields.join('}');
+};
 
 // ตรวจ / check-in SN ที่ station ก่อน update (ตามโปรแกรม Themister ของไลน์)
 // ไม่ check ก่อน -> routing-update ตอบ "SN NOT INPUT"

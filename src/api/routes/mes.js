@@ -301,7 +301,8 @@ router.post('/api/mes/update-route', authenticateMesOperator, async (req, res) =
             testData,
           })
         : null;
-    const row = inputPayload || failPayload ? JSON.stringify(inputPayload || failPayload) : buildRoutingRow({ ...fields, result });
+    const row = inputPayload || failPayload ? JSON.stringify(inputPayload || failPayload)
+      : buildRoutingRow({ ...fields, result, errorCode: defect?.defect_code, errorDesc: defect?.description });
 
     let success = false;
     let responseText = '';
