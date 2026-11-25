@@ -656,9 +656,6 @@ export default function LinesAndStation({ isDarkMode }) {
         </div>
       </div>
 
-      <div className={`px-4 py-2.5 rounded-xl border text-xs ${isDarkMode ? 'bg-blue-500/10 border-blue-500/30 text-blue-200' : 'bg-blue-50 border-blue-200 text-blue-800'}`}>
-        Line และ Station ดึงจาก MES — ที่นี่ผูกหัวหน้า Line (Owner / Leader / Supervisor) และข้อสอบของ Station
-      </div>
       {mesError && (
         <div className="px-4 py-2.5 rounded-xl border text-xs bg-rose-500/10 border-rose-500/30 text-rose-500">
           ดึง Line / Station จาก MES ไม่ได้: {mesError} — กดปุ่มรีเฟรชเพื่อลองใหม่
