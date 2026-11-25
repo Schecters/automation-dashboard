@@ -132,7 +132,7 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         id: "lines_station",
         label: "Lines & Stations",
         category: "System Overview",
-        roles: ["admin", "me", "ie", "pd", "q"],
+        roles: ["admin", "me", "ie", "pd"],
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2h0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
@@ -143,7 +143,7 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         id: "layout_view",
         label: "Layout Overview",
         category: "System Overview",
-        roles: ["admin", "me", "ie", "pd", "q", "view"],
+        roles: ["admin", "me", "ie", "pd", "view"],
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
@@ -191,7 +191,7 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         id: "operator",
         label: "Operator List",
         category: "Production Control",
-        roles: ["admin", "pd", "me"],
+        roles: ["admin", "pd", "me", "q"],
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
@@ -215,7 +215,7 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         label: "Daily PM Checklist",
         category: "Production Control",
         // ทุก role เข้าดู/อนุมัติได้ (ผู้อนุมัติอาจเป็น Leader/Supervisor ที่ role ใดก็ได้) แต่ View บันทึกไม่ได้
-        roles: ["admin", "me", "ie", "pd", "q", "view"],
+        roles: ["admin", "me", "ie", "pd", "view"],
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -250,7 +250,7 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         label: "MES Output",
         category: "Production Control",
         // ยอด OK / NG จากหน้า /MES แยก Line / Station (real time)
-        roles: ["admin", "me", "ie", "pd", "q", "view"],
+        roles: ["admin", "me", "ie", "pd", "view"],
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -261,7 +261,7 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         id: "defect_history",
         label: "Defect History",
         category: "Production Control",
-        roles: ["admin", "me", "ie", "pd", "q", "view"],
+        roles: ["admin", "me", "ie", "pd", "view"],
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l6-6m-6 0l6 6" />
