@@ -57,6 +57,7 @@ export default function ChromaPage({ isDarkMode, setIsDarkMode, embedded = false
   const [dialog, setDialog] = useState(null); // { title, body, okText, danger, resolve }
   const [form, setForm] = useState(null); // ลงทะเบียน / แก้เครื่อง
   const [keyShow, setKeyShow] = useState(null); // { apiKey, stationId, name }
+  const [serverCert, setServerCert] = useState(null); // { sha256, validTo } ของหน้าเว็บ — คอมเทส pin ค่านี้
   const selRef = useRef(selId);
 
   // เปลี่ยนเครื่อง → ล้างข้อมูลของเครื่องเดิม
@@ -150,7 +151,9 @@ export default function ChromaPage({ isDarkMode, setIsDarkMode, embedded = false
   }, [toast]);
 
   useEffect(() => {
-    if (allowed) loadStations();
+    if (!allowed) return;
+    loadStations();
+    chromaApi("/server-cert").then((r) => setServerCert(r.cert || null)).catch(() => {});
   }, [allowed, loadStations]);
 
   // เลือกเครื่อง → อ่านสถานะ + ขอรับข้อมูลสด (ต่ออายุทุก 30 วิ)
@@ -325,6 +328,16 @@ export default function ChromaPage({ isDarkMode, setIsDarkMode, embedded = false
               </button>
             ))}
           </div>
+          <div className={`mt-3 pt-3 border-t text-[11px] ${u.row}`}>
+            <div className="font-bold text-gray-400">Server cert SHA-256 (ใส่ที่คอมเทส)</div>
+            {serverCert ? (
+              <button className="font-mono break-all text-left hover:text-blue-500" title="คลิกเพื่อคัดลอก" onClick={() => copy(serverCert.sha256)}>
+                {serverCert.sha256}
+              </button>
+            ) : (
+              <div className="text-amber-600">ยังใช้ cert ชั่วคราว — Restart หน้าเว็บ (Vite) ให้สร้าง cert ถาวร</div>
+            )}
+          </div>
         </aside>
 
         <main className="space-y-4 min-w-0">
@@ -455,7 +468,10 @@ export default function ChromaPage({ isDarkMode, setIsDarkMode, embedded = false
             </div>
             <div>API key: <b>{keyShow.apiKey}</b></div>
             <div>Server URL: <b>{window.location.origin}</b></div>
-            <div className="font-sans text-xs text-gray-400">Server cert SHA-256: ดูจากคำสั่ง npm run make:https-cert บน server</div>
+            <div>
+              Server cert SHA-256:{" "}
+              {serverCert ? <b>{serverCert.sha256}</b> : <span className="font-sans text-xs text-amber-600">server ยังใช้ cert ชั่วคราว — Restart หน้าเว็บ (Vite) ให้สร้าง cert ถาวรก่อน</span>}
+            </div>
           </div>
           <div className="flex justify-end gap-2 mt-4">
             <button className={u.btn} onClick={() => copy(keyShow.apiKey)}>คัดลอก key</button>

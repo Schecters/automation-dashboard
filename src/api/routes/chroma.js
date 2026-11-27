@@ -5,7 +5,7 @@ import { authenticateToken, requireRoles } from '../middleware/auth.js';
 import { io, userRoom } from '../lib/realtime.js';
 import {
   newApiKey, encryptKey, decryptKey, sameKey, normFp, fetchCert, validHost, validPort,
-  stationRequest, openStationEvents, StationError,
+  stationRequest, openStationEvents, StationError, serverCertInfo,
 } from '../lib/chromaStation.js';
 
 // ==========================================
@@ -73,6 +73,12 @@ router.get('/api/chroma/stations', auth, async (req, res) => {
     console.error('chroma stations:', err);
     fail(res, 500, 'อ่านรายการเครื่องไม่ได้');
   }
+});
+
+// SHA-256 ของ certificate หน้าเว็บ (ให้ผู้ใช้ใส่ที่คอมเทสช่อง "Server cert SHA-256")
+router.get('/api/chroma/server-cert', auth, (req, res) => {
+  const info = serverCertInfo();
+  res.json({ success: true, cert: info });
 });
 
 // ขั้น 1 ลงทะเบียน: อ่าน certificate ของคอมเทส ให้ผู้ใช้เทียบ fingerprint กับจอคอมเทส

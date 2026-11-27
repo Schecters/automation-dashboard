@@ -202,7 +202,9 @@ git push
   - **certificate ของหน้าเว็บ 5173 ต้องคงที่** เพราะคอมเทส pin SHA-256 ของ server ไว้ (ช่อง "Server cert SHA-256")
     `vite.config.js` ใช้ `HTTPS_KEY_FILE` / `HTTPS_CERT_FILE` (.env) หรือ `<โฟลเดอร์แม่ของโปรเจกต์>\certs\dashboard.key|crt`
     (บน server = `C:\Website\certs\`) — ไม่มีไฟล์ = ถอยไปใช้ basicSsl (cert เปลี่ยนทุก 30 วัน → คอมเทสส่งไม่ได้เมื่อหมดอายุ)
-    สร้างไฟล์: `npm run make:https-cert -- --ip 10.204.206.1` (อายุ 10 ปี, พิมพ์ SHA-256 ให้ใส่ที่คอมเทส, มีอยู่แล้ว = ไม่สร้างทับ เว้นแต่ `--force`)
+    **สร้างอัตโนมัติ** ตอนหน้าเว็บ (vite) เปิดครั้งแรกถ้ายังไม่มีไฟล์ (ใช้ path เริ่มต้นเท่านั้น) — SAN = 10.204.206.1 + ทุก IPv4 ของเครื่อง, อายุ 10 ปี, มีแล้วไม่สร้างทับ
+    SHA-256 แสดงในหน้า Chroma Tester (ใต้รายการเครื่อง + ตอนลงทะเบียน, API `GET /api/chroma/server-cert`) และใน log หน้าเว็บของ launcher
+    สร้างเอง / ดูค่า: `npm run make:https-cert` (`--force` = สร้างใหม่ทับ)
     สร้างใหม่ / เปลี่ยน cert = ต้องแก้ SHA-256 ที่คอมเทสทุกเครื่อง + เบราว์เซอร์ทุกเครื่องเตือน cert ใหม่ 1 ครั้ง · ไฟล์ `.key` ห้ามขึ้น GitHub
   - ทดสอบโดยไม่มีคอมเทสจริง: `node tools/chroma-mock/mock-station.mjs --port 8443 --key <API key> --server https://localhost:5173 --station <id>`
     (cert ของ mock สร้างเองที่ `tools/chroma-mock/.cert/` — gitignore แล้ว, `--fail 2` = FAIL ที่ step 2, `--auto-every 10` = จำลอง PLC สั่ง Start ในโหมด Auto)

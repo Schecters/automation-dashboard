@@ -1,7 +1,20 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import https from 'https';
 import tls from 'tls';
-import { JWT_SECRET } from './config.js';
+import { JWT_SECRET, PROJECT_ROOT } from './config.js';
+
+// certificate ของหน้าเว็บ 5173 (ไฟล์เดียวกับที่ vite.config.js ใช้) — คอมเทสต้อง pin SHA-256 นี้
+export const serverCertInfo = () => {
+  const file = process.env.HTTPS_CERT_FILE || path.join(path.resolve(PROJECT_ROOT, '..', 'certs'), 'dashboard.crt');
+  try {
+    const c = new crypto.X509Certificate(fs.readFileSync(file));
+    return { sha256: normFp(c.fingerprint256), validTo: c.validTo, san: c.subjectAltName || '' };
+  } catch {
+    return null; // ยังไม่มีไฟล์ → หน้าเว็บใช้ cert ชั่วคราว (basicSsl) ที่เปลี่ยนทุก 30 วัน
+  }
+};
 
 // ==========================================
 // 🔌 คุยกับคอมเทส Chroma (C# Station App) ผ่าน HTTPS

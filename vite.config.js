@@ -1,5 +1,7 @@
 /* global process */
 import { readFileSync, existsSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { X509Certificate } from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -34,15 +36,28 @@ for (const svc of servicesConfig.services) {
 //  คอมเทส Chroma (C# Station App) pin SHA-256 ของ cert นี้ไว้ตอนส่ง log ขึ้น server → cert เปลี่ยน = คอมเทสส่งไม่ได้
 //  basicSsl สร้าง cert ใหม่ทุก 30 วัน จึงใช้เป็นตัวสำรองเท่านั้น (ยังไม่ได้สร้างไฟล์ / เครื่อง dev)
 //  ตำแหน่งไฟล์: HTTPS_KEY_FILE / HTTPS_CERT_FILE ใน .env หรือค่าเริ่มต้น <โฟลเดอร์แม่ของโปรเจกต์>\certs\dashboard.key|crt (นอก repo)
-//  สร้างไฟล์: npm run make:https-cert (ดู tools/make-https-cert.cjs)
+//  ยังไม่มีไฟล์ (ที่ตำแหน่งเริ่มต้น) → สร้างให้อัตโนมัติตอนเปิดหน้าเว็บครั้งแรก (tools/make-https-cert.cjs) — มีแล้วไม่สร้างทับ
+//  SHA-256 ของ cert ดูได้ที่หน้า Chroma Tester (ตอนลงทะเบียนเครื่อง) หรือ log ของหน้าเว็บใน launcher
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(projectRoot, '.env'), quiet: true });
 const certDir = path.resolve(projectRoot, '..', 'certs');
 const keyFile = process.env.HTTPS_KEY_FILE || path.join(certDir, 'dashboard.key');
 const certFile = process.env.HTTPS_CERT_FILE || path.join(certDir, 'dashboard.crt');
+const useDefaultPaths = !process.env.HTTPS_KEY_FILE && !process.env.HTTPS_CERT_FILE;
+if (useDefaultPaths && !(existsSync(keyFile) && existsSync(certFile))) {
+  try {
+    execFileSync(process.execPath, [path.join(projectRoot, 'tools', 'make-https-cert.cjs'), '--out', certDir], { stdio: 'inherit' });
+  } catch (err) {
+    console.warn(`⚠️ สร้าง certificate อัตโนมัติไม่ได้ (${err.message}) — ใช้ cert ชั่วคราวของ basicSsl แทน`);
+  }
+}
 const ownCert = existsSync(keyFile) && existsSync(certFile)
   ? { key: readFileSync(keyFile), cert: readFileSync(certFile) }
   : null;
+if (ownCert) {
+  const fp = new X509Certificate(ownCert.cert).fingerprint256.replace(/:/g, '');
+  console.log(`🔐 HTTPS certificate: ${certFile}\n   SHA-256 (ใส่ที่คอมเทส Chroma ช่อง "Server cert SHA-256"): ${fp}`);
+}
 const httpsOption = ownCert || true;
 
 export default defineConfig({

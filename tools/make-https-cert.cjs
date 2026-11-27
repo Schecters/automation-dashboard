@@ -22,7 +22,14 @@ const projectRoot = path.resolve(__dirname, '..');
 const outDir = path.resolve(args.out || path.join(projectRoot, '..', 'certs'));
 const keyFile = path.join(outDir, 'dashboard.key');
 const certFile = path.join(outDir, 'dashboard.crt');
-const ips = String(args.ip || '10.204.206.1').split(',').map((s) => s.trim()).filter(Boolean);
+// IP ใน cert: ที่สั่ง (--ip) + IP server หลัก + ทุก IPv4 ของเครื่องนี้ (เข้าได้ทุกช่องทาง ไม่ต้องรู้ IP ล่วงหน้า)
+const localIps = Object.values(os.networkInterfaces()).flat()
+  .filter((n) => n && n.family === 'IPv4' && !n.internal).map((n) => n.address);
+const ips = [...new Set([
+  ...String(args.ip || '').split(',').map((s) => s.trim()).filter(Boolean),
+  '10.204.206.1',
+  ...localIps,
+])];
 const name = String(args.name || os.hostname());
 
 const fingerprint = (pem) => new crypto.X509Certificate(pem).fingerprint256.replace(/:/g, '').toUpperCase();
