@@ -81,6 +81,27 @@ router.get('/api/chroma/server-cert', auth, (req, res) => {
   res.json({ success: true, cert: info });
 });
 
+// คอมเทสดึง SHA-256 ของ cert หน้าเว็บไปอัปเดตเอง (ไม่ต้องพิมพ์ / cert เปลี่ยนแล้วตามได้เอง)
+//  คอมเทสยังไม่เชื่อ cert ตอนเรียก → ห้ามส่ง API key มา: ส่งแค่ X-Station-Id + nonce สุ่ม
+//  server ตอบ sha256 + sig = HMAC-SHA256(API key, "chroma-server-cert|<stationId>|<nonce>|<sha256>") (hex ตัวเล็ก)
+//  คอมเทสเชื่อเมื่อ (1) sig ถูก (มีแต่ server จริงที่รู้ key) และ (2) sha256 = cert ที่ได้จาก TLS จริง (กันคนกลางส่งต่อคำตอบ)
+router.get('/api/chroma/server-cert/signed', async (req, res) => {
+  const nonce = String(req.query.nonce || '');
+  if (!/^[0-9a-fA-F]{16,128}$/.test(nonce)) return res.status(400).json({ error: 'nonce ต้องเป็น hex 16-128 ตัว' });
+  const s = await getStation(req.get('x-station-id')).catch(() => null);
+  if (!s) return res.status(401).json({ error: 'X-Station-Id ไม่ถูกต้อง (ต้องเป็นเลข Station ID จาก Dashboard)' });
+  const info = serverCertInfo();
+  if (!info) return res.status(404).json({ error: 'server ยังใช้ cert ชั่วคราว — Restart หน้าเว็บ (Vite) ให้สร้าง cert ถาวรก่อน' });
+  let key;
+  try {
+    key = decryptKey(s.api_key_enc);
+  } catch {
+    return res.status(500).json({ error: 'อ่าน API key ของเครื่องไม่ได้ — สร้าง key ใหม่' });
+  }
+  const sig = crypto.createHmac('sha256', key).update(`chroma-server-cert|${s.id}|${nonce}|${info.sha256}`).digest('hex');
+  res.json({ sha256: info.sha256, validTo: info.validTo, nonce, sig });
+});
+
 // ขั้น 1 ลงทะเบียน: อ่าน certificate ของคอมเทส ให้ผู้ใช้เทียบ fingerprint กับจอคอมเทส
 router.post('/api/chroma/stations/probe', auth, async (req, res) => {
   const { ip, port = 8443 } = req.body || {};

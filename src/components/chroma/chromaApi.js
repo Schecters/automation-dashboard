@@ -53,6 +53,40 @@ export function fmtRaw(raw, unit) {
   return eng(n) + (unit ? ` ${unit}` : "");
 }
 
+// ---------- แปลงข้อมูลจากคอมเทส (C# Station App) ให้หน้าเว็บใช้รูปแบบเดียว ----------
+// live: คอมเทสส่ง { live: { step, mode, mets, timeLeft }, elapsed }
+export const normLive = (d) => {
+  const lv = d && typeof d === "object" && d.live !== undefined ? d.live : d;
+  if (!lv || typeof lv !== "object") return null;
+  return { ...lv, remaining: lv.remaining ?? lv.timeLeft ?? null };
+};
+// ผลเทส: runCompleted = { runId, result, reason, steps: [{ index, mode, stateRaw, outcome, text, mets, testTime }], sn }
+//        status.lastRun = { runId, at, result, failStep, failCode, failText, sn, source, memoryNo, reason }
+export const normRun = (r) => {
+  if (!r || typeof r !== "object") return null;
+  const steps = (r.steps || []).map((s) => ({
+    stepNo: s.stepNo ?? s.index,
+    mode: s.mode,
+    outcome: s.outcome,
+    text: s.text,
+    stateCodes: s.stateCodes ?? s.stateRaw,
+    mets: s.mets || [],
+    testTime: s.testTime,
+  }));
+  const firstFail = steps.find((s) => String(s.outcome || "").toUpperCase() === "FAIL");
+  return {
+    ...r,
+    result: String(r.result || "").toUpperCase() || null,
+    steps,
+    failStep: r.failStep || firstFail?.stepNo || 0,
+    failText: r.failText ?? firstFail?.text ?? r.reason ?? null,
+    failCode: r.failCode || firstFail?.stateCodes || null,
+  };
+};
+// idn: คอมเทสส่งข้อความ "Chroma,19036,<serial>,<FW>" / โปรแกรมอื่นส่ง object
+export const firmwareOf = (idn) =>
+  !idn ? "" : typeof idn === "string" ? (idn.split(",")[3] || "").trim() : idn.firmware || "";
+
 // ---------- วันทำงาน / กะ (07:40-19:40 เช้า / 19:40-07:40 ดึก) ----------
 const bkk = (d = new Date()) => new Date(d.getTime() + 7 * 3600000).toISOString();
 export const todayBkk = () => bkk().slice(0, 10);

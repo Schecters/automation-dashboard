@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { socket } from "../../socket";
-import { chromaApi, station, fmtTime, ui } from "./chromaApi";
+import { chromaApi, station, fmtTime, ui, normLive, normRun, firmwareOf } from "./chromaApi";
 import ChromaSteps from "./ChromaSteps";
 import ChromaTest from "./ChromaTest";
 import ChromaPlcOee from "./ChromaPlcOee";
@@ -133,7 +133,7 @@ export default function ChromaPage({ isDarkMode, setIsDarkMode, embedded = false
         if (selRef.current !== id) return;
         setStatus(s);
         setStatusErr("");
-        if (s.lastRun) setLastRun((cur) => cur || s.lastRun);
+        if (s.lastRun) setLastRun((cur) => cur || normRun(s.lastRun));
       })
       .catch((e) => {
         if (selRef.current === id) setStatusErr(e.message);
@@ -184,13 +184,13 @@ export default function ChromaPage({ isDarkMode, setIsDarkMode, embedded = false
           setStatus((cur) => ({ ...(cur || {}), ...(m.data || {}) }));
           break;
         case "live":
-          setLive(m.data);
+          setLive(normLive(m.data));
           break;
         case "runStarted":
           setLive(null);
           break;
         case "runCompleted":
-          setLastRun(m.data);
+          setLastRun(normRun(m.data));
           setLive(null);
           setHistoryKey((k) => k + 1);
           break;
@@ -365,7 +365,7 @@ export default function ChromaPage({ isDarkMode, setIsDarkMode, embedded = false
                             <span className={status.connected?.[k] ? "text-emerald-500" : "text-rose-500"}>●</span> {k === "chroma" ? "Chroma" : k === "plc" ? "PLC" : "Server"}
                           </span>
                         ))}
-                        {status.idn && <span>FW {status.idn.firmware}</span>}
+                        {firmwareOf(status.idn) && <span>FW {firmwareOf(status.idn)}</span>}
                         {status.memory && <span>memory #{status.memory.no} {status.memory.name} ({status.memory.steps} step)</span>}
                         {status.outboxPending > 0 && <span className="text-amber-500">log ค้างส่ง {status.outboxPending}</span>}
                         <span className={streamOk ? "text-emerald-500" : "text-amber-500"}>{streamOk ? "ข้อมูลสด ✓" : "ข้อมูลสดยังไม่ต่อ"}</span>

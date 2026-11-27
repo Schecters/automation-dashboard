@@ -205,7 +205,10 @@ git push
     **สร้างอัตโนมัติ** ตอนหน้าเว็บ (vite) เปิดครั้งแรกถ้ายังไม่มีไฟล์ (ใช้ path เริ่มต้นเท่านั้น) — SAN = 10.204.206.1 + ทุก IPv4 ของเครื่อง, อายุ 10 ปี, มีแล้วไม่สร้างทับ
     SHA-256 แสดงในหน้า Chroma Tester (ใต้รายการเครื่อง + ตอนลงทะเบียน, API `GET /api/chroma/server-cert`) และใน log หน้าเว็บของ launcher
     สร้างเอง / ดูค่า: `npm run make:https-cert` (`--force` = สร้างใหม่ทับ)
-    สร้างใหม่ / เปลี่ยน cert = ต้องแก้ SHA-256 ที่คอมเทสทุกเครื่อง + เบราว์เซอร์ทุกเครื่องเตือน cert ใหม่ 1 ครั้ง · ไฟล์ `.key` ห้ามขึ้น GitHub
+    **คอมเทสดึง SHA-256 ไปอัปเดตเอง**: `GET /api/chroma/server-cert/signed?nonce=` + `X-Station-Id` (ไม่มี key) → `{ sha256, sig }`
+    sig = HMAC-SHA256(API key ของเครื่อง, `chroma-server-cert|<id>|<nonce>|<sha256>`) — คอมเทสตรวจ sig + เทียบกับ cert ที่ได้จาก TLS จริง (กันคนกลาง)
+    → เปลี่ยน cert ได้โดยไม่ต้องแก้ที่คอมเทส (ช่อง SHA-256 ที่คอมเทสเว้นว่างได้)
+    สร้างใหม่ / เปลี่ยน cert = คอมเทสดึงค่าใหม่เอง (ภายใน ~1 นาที) + เบราว์เซอร์ทุกเครื่องเตือน cert ใหม่ 1 ครั้ง · ไฟล์ `.key` ห้ามขึ้น GitHub
   - ทดสอบโดยไม่มีคอมเทสจริง: `node tools/chroma-mock/mock-station.mjs --port 8443 --key <API key> --server https://localhost:5173 --station <id>`
     (cert ของ mock สร้างเองที่ `tools/chroma-mock/.cert/` — gitignore แล้ว, `--fail 2` = FAIL ที่ step 2, `--auto-every 10` = จำลอง PLC สั่ง Start ในโหมด Auto)
 - **WMS** (ข้อมูล WO): `src/api/lib/wmsClient.js` login ที่ `WMS_AUTH_BASE` (default `http://10.204.212.28:15000/auth/login`)

@@ -30,8 +30,10 @@ export default function ChromaTest({ stationId, status, live, lastRun, isDarkMod
   const [sn, setSn] = useState("");
   const [busy, setBusy] = useState(false);
   const auto = status?.mode === "Auto";
-  const idle = !status?.state || status.state === "Idle";
-  const running = !idle;
+  // กำลังทำงาน = เทส / งานจ่ายไฟ (Disconnected / Connecting ไม่นับ แต่ START ก็กดไม่ได้เพราะยังไม่ Idle)
+  const running = ["Starting", "Running", "Collecting", "Operation"].includes(status?.state);
+  const idle = status?.state === "Idle";
+
 
   const start = async () => {
     const token = await hvConfirm(
@@ -87,7 +89,7 @@ export default function ChromaTest({ stationId, status, live, lastRun, isDarkMod
             <div className={u.lbl}>SN / ป้ายของรอบนี้ (ไม่บังคับ)</div>
             <input className={`${u.input} w-full`} value={sn} onChange={(e) => setSn(e.target.value)} disabled={auto} placeholder={auto ? "โหมด Auto — PLC เป็นผู้สั่ง" : ""} />
           </div>
-          <button className={`${u.primary} !px-8 !py-3 !text-base`} disabled={auto || running || busy} onClick={start}>START</button>
+          <button className={`${u.primary} !px-8 !py-3 !text-base`} disabled={auto || !idle || busy} onClick={start}>START</button>
           <button className="px-8 py-3 rounded-xl text-base font-black bg-rose-600 hover:bg-rose-700 text-white" onClick={onStop}>STOP</button>
         </div>
         <p className="text-xs text-gray-400 mt-2">
