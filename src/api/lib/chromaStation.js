@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import https from 'https';
+import http from 'http';
 import tls from 'tls';
 import { JWT_SECRET, PROJECT_ROOT } from './config.js';
 
@@ -87,18 +87,6 @@ export const fetchCert = (host, port, timeoutMs = 5000) =>
     });
   });
 
-// ตัวเลือก TLS ที่เชื่อเฉพาะ cert ที่ pin ไว้
-const pinnedTls = (station) => ({
-  ca: station.cert_pem,
-  rejectUnauthorized: true,
-  // ใช้ IP ต่อ (cert ไม่มีชื่อ IP) → ข้ามการเทียบชื่อ แต่เทียบ fingerprint แทน
-  checkServerIdentity: (_host, cert) =>
-    normFp(cert.fingerprint256) === normFp(station.cert_sha256)
-      ? undefined
-      : new Error('certificate ของคอมเทสไม่ตรงกับที่ลงทะเบียนไว้ (เครื่องถูกเปลี่ยน / สร้าง cert ใหม่?) — ลงทะเบียนใหม่'),
-  agent: false,
-});
-
 export class StationError extends Error {
   constructor(message, status = 503, body = null) {
     super(message);
@@ -108,14 +96,45 @@ export class StationError extends Error {
 }
 
 /**
+ * ต่อ TLS ไปคอมเทส แล้วเชื่อเฉพาะ cert ที่ SHA-256 ตรงกับที่ลงทะเบียน (pin) — ยังไม่ส่งข้อมูลใด ๆ จนกว่าจะตรวจผ่าน
+ *  ไม่ใช้การตรวจ chain ของ OpenSSL (ca + rejectUnauthorized) เพราะ cert self-signed ที่ .NET สร้าง (CA:FALSE, ไม่มี keyCertSign)
+ *  ถูก OpenSSL บางรุ่นปฏิเสธ ("unable to verify the first certificate") แม้จะเป็น cert ตัวเดียวกันก็ตาม
+ *  การเทียบ SHA-256 ทั้งใบปลอดภัยเท่ากัน (ปลอม cert ให้ได้ hash เดียวกันไม่ได้)
+ */
+const pinnedSocket = (station, timeoutMs) =>
+  new Promise((resolve, reject) => {
+    const who = station.name || station.ip;
+    const sock = tls.connect({ host: station.ip, port: Number(station.port), rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] });
+    const timer = setTimeout(() => {
+      sock.destroy();
+      reject(new StationError(`ต่อคอมเทส ${who} ไม่ทันเวลา (${Math.round(timeoutMs / 1000)} วินาที)`));
+    }, timeoutMs);
+    sock.once('secureConnect', () => {
+      clearTimeout(timer);
+      const fp = normFp(sock.getPeerCertificate()?.fingerprint256);
+      if (!fp || fp !== normFp(station.cert_sha256)) {
+        sock.destroy();
+        reject(new StationError(`certificate ของคอมเทส ${who} ไม่ตรงกับที่ลงทะเบียนไว้ (เครื่องถูกเปลี่ยน / สร้าง cert ใหม่?) — กด "แก้ไขเครื่อง" → ตรวจเครื่องใหม่`, 502));
+        return;
+      }
+      resolve(sock);
+    });
+    sock.once('error', (err) => {
+      clearTimeout(timer);
+      reject(new StationError(`ต่อคอมเทส ${who} ไม่ได้: ${err.message}`));
+    });
+  });
+
+/**
  * เรียก API ของคอมเทส → { status, body } (body = JSON หรือข้อความ)
  * @param {object} station  แถวจาก chroma_stations (ต้องมี ip, port, cert_pem, cert_sha256, api_key_enc)
  * @param {string} method
  * @param {string} path  หลัง /api/v1 เช่น "/status"
  * @param {{ body?: any, user?: { employee_id: string, name?: string }, timeoutMs?: number }} opts
  */
-export const stationRequest = (station, method, path, { body, user, timeoutMs = 8000 } = {}) =>
-  new Promise((resolve, reject) => {
+export const stationRequest = async (station, method, path, { body, user, timeoutMs = 8000 } = {}) => {
+  const sock = await pinnedSocket(station, Math.min(timeoutMs, 8000));
+  return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
     const headers = {
       Accept: 'application/json',
@@ -130,8 +149,10 @@ export const stationRequest = (station, method, path, { body, user, timeoutMs = 
       // header ต้องเป็น ASCII → ชื่อภาษาไทยส่งแบบ encodeURIComponent
       headers['X-User-Name'] = encodeURIComponent(String(user.name || ''));
     }
-    const req = https.request(
-      { host: station.ip, port: Number(station.port), method, path: `/api/v1${path}`, headers, timeout: timeoutMs, ...pinnedTls(station) },
+    headers.Connection = 'close';
+    // ส่ง HTTP บน socket TLS ที่ตรวจ cert แล้ว (http.request + createConnection = ไม่ห่อ TLS ซ้ำ)
+    const req = http.request(
+      { host: station.ip, port: Number(station.port), method, path: `/api/v1${path}`, headers, timeout: timeoutMs, createConnection: () => sock },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
@@ -154,6 +175,7 @@ export const stationRequest = (station, method, path, { body, user, timeoutMs = 
     if (payload) req.write(payload);
     req.end();
   });
+};
 
 /**
  * เปิด SSE /events ของคอมเทส — เรียก onEvent(type, data) ทุก event / คืนฟังก์ชันปิด
@@ -162,14 +184,18 @@ export const stationRequest = (station, method, path, { body, user, timeoutMs = 
 export const openStationEvents = (station, onEvent, onClose) => {
   let closed = false;
   let buf = '';
-  const req = https.request(
+  let req = null;
+  pinnedSocket(station, 8000)
+    .then((sock) => {
+      if (closed) return sock.destroy();
+      req = http.request(
     {
       host: station.ip,
       port: Number(station.port),
       method: 'GET',
       path: '/api/v1/events',
       headers: { Accept: 'text/event-stream', 'X-Api-Key': decryptKey(station.api_key_enc) },
-      ...pinnedTls(station),
+      createConnection: () => sock,
     },
     (res) => {
       if (res.statusCode !== 200) {
@@ -209,13 +235,18 @@ export const openStationEvents = (station, onEvent, onClose) => {
       });
     }
   );
-  req.on('error', (err) => {
-    if (!closed) onClose?.(err);
-    closed = true;
-  });
-  req.end();
+      req.on('error', (err) => {
+        if (!closed) onClose?.(err);
+        closed = true;
+      });
+      req.end();
+    })
+    .catch((err) => {
+      if (!closed) onClose?.(err);
+      closed = true;
+    });
   return () => {
     closed = true;
-    req.destroy();
+    req?.destroy();
   };
 };
