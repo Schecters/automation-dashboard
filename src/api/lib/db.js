@@ -273,6 +273,101 @@ export const initDatabase = async () => {
       CREATE INDEX IF NOT EXISTS idx_defect_logs_created_at ON automation_lines.defect_logs (created_at DESC);
     `);
 
+    // 🔌 Chroma Tester (service chroma 5006) — เครื่องทดสอบ Chroma 19036 ผ่านคอมเทสหน้าเครื่อง (C# Station App)
+    //  chroma_events = event ดิบจากคอมเทส (id uuid กันบันทึกซ้ำ) แล้วแตกลงตารางตามชนิด
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS automation_lines.chroma_stations (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        ip VARCHAR(64) NOT NULL,
+        port INT NOT NULL DEFAULT 8443,
+        line VARCHAR(100),
+        location VARCHAR(200),
+        api_key_enc TEXT NOT NULL,
+        cert_sha256 VARCHAR(64) NOT NULL,
+        cert_pem TEXT NOT NULL,
+        plc_config JSONB,
+        last_seen TIMESTAMPTZ,
+        last_status JSONB,
+        created_by VARCHAR(30),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS automation_lines.chroma_events (
+        id UUID PRIMARY KEY,
+        station_id INT NOT NULL,
+        type VARCHAR(40) NOT NULL,
+        at TIMESTAMPTZ NOT NULL,
+        employee_id VARCHAR(30),
+        source VARCHAR(10),
+        data JSONB,
+        received_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_chroma_events_station_at ON automation_lines.chroma_events (station_id, at DESC);
+      CREATE TABLE IF NOT EXISTS automation_lines.chroma_param_changes (
+        id SERIAL PRIMARY KEY,
+        event_id UUID,
+        station_id INT NOT NULL,
+        at TIMESTAMPTZ NOT NULL,
+        employee_id VARCHAR(30),
+        source VARCHAR(10),
+        kind VARCHAR(30) NOT NULL,
+        memory_no INT,
+        memory_name VARCHAR(100),
+        step INT,
+        sub INT,
+        mode VARCHAR(20),
+        path VARCHAR(100),
+        label VARCHAR(100),
+        old_value TEXT,
+        new_value TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_chroma_param_changes_station_at ON automation_lines.chroma_param_changes (station_id, at DESC);
+      CREATE TABLE IF NOT EXISTS automation_lines.chroma_test_runs (
+        id SERIAL PRIMARY KEY,
+        event_id UUID UNIQUE,
+        station_id INT NOT NULL,
+        started_at TIMESTAMPTZ,
+        ended_at TIMESTAMPTZ NOT NULL,
+        source VARCHAR(10),
+        sn VARCHAR(200),
+        memory_no INT,
+        memory_name VARCHAR(100),
+        result VARCHAR(10) NOT NULL,
+        fail_step INT,
+        fail_code VARCHAR(50),
+        fail_text TEXT,
+        employee_id VARCHAR(30)
+      );
+      CREATE INDEX IF NOT EXISTS idx_chroma_test_runs_station_ended ON automation_lines.chroma_test_runs (station_id, ended_at DESC);
+      CREATE TABLE IF NOT EXISTS automation_lines.chroma_test_steps (
+        run_id INT NOT NULL REFERENCES automation_lines.chroma_test_runs(id) ON DELETE CASCADE,
+        step_no INT NOT NULL,
+        mode VARCHAR(20),
+        outcome VARCHAR(20),
+        state_codes VARCHAR(100),
+        text TEXT,
+        mets JSONB,
+        test_time DOUBLE PRECISION,
+        PRIMARY KEY (run_id, step_no)
+      );
+      CREATE TABLE IF NOT EXISTS automation_lines.chroma_oee_minutes (
+        station_id INT NOT NULL,
+        minute TIMESTAMPTZ NOT NULL,
+        run_sec INT DEFAULT 0,
+        stop_sec INT DEFAULT 0,
+        alarm_sec INT DEFAULT 0,
+        planned_stop_sec INT DEFAULT 0,
+        total_delta INT DEFAULT 0,
+        ok_delta INT DEFAULT 0,
+        ng_delta INT DEFAULT 0,
+        ideal_ct_ms INT,
+        alarm_codes JSONB,
+        tester_pass INT DEFAULT 0,
+        tester_fail INT DEFAULT 0,
+        PRIMARY KEY (station_id, minute)
+      );
+    `);
+
     await pool.query(`
       ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email VARCHAR(255) DEFAULT NULL;
       ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS shift VARCHAR(10) DEFAULT NULL;

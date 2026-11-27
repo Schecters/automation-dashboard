@@ -21,6 +21,7 @@ import operatorDataRoutes from './routes/operatorData.js';
 import pmChecklistRoutes from './routes/pmChecklist.js';
 import mesRoutes from './routes/mes.js';
 import defectsRoutes from './routes/defects.js';
+import chromaRoutes from './routes/chroma.js';
 
 // ==========================================
 // 🧰 โหมดรวม: ทุก API อยู่ใน process เดียวที่ port 5000 (แบบเดิมก่อนแยก service)
@@ -48,6 +49,7 @@ const { server } = createServiceApp('all-in-one', [
   pmChecklistRoutes, // Daily PM Checklist
   mesRoutes, // MES Update
   defectsRoutes, // Defect Code + ประวัติงานเสีย
+  chromaRoutes, // Chroma Tester (หน้า /chroma)
 ]);
 
 initRealtime(server);

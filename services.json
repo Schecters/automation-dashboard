@@ -39,6 +39,14 @@
       "prefixes": ["/api/mes"]
     },
     {
+      "id": "chroma",
+      "name": "Chroma Tester",
+      "port": 5006,
+      "host": "127.0.0.1",
+      "entry": "src/api/services/chroma.js",
+      "prefixes": ["/api/chroma"]
+    },
+    {
       "id": "work",
       "name": "งานซ่อม / PM / แจ้งเตือน",
       "port": 5005,

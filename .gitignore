@@ -42,3 +42,6 @@ src/assets/*
 # MES Bridge: node.exe ที่ก็อปไปวางให้ PC หน้าไลน์ (ไฟล์ใหญ่ ไม่ขึ้น git)
 tools/mes-bridge/node.exe
 tools/mes-bridge/mes-bridge.config.json
+
+# คอมเทส Chroma จำลอง: certificate / key ที่สร้างตอนรัน (ห้ามขึ้น GitHub)
+tools/chroma-mock/.cert/

@@ -92,6 +92,7 @@ git push
 | `dashboard/` | OverallContent (ภาพรวม ดึงหลายเรื่อง), ApiDocContent (คู่มือ API) | หลายไฟล์ |
 | `defects/` | DefectCodeContent (อาการงานเสีย), DefectHistoryContent (ประวัติงานเสีย) | `defects.js` |
 | `common/` | NotificationBell, DarkModeToggle | `notifications.js` |
+| `chroma/` | ChromaPage (หน้า `/chroma` แยก ไม่อยู่ในแท็บ Home), ChromaSteps, ChromaTest, ChromaPlcOee, ChromaHistory, WaveChart | `chroma.js` + `lib/chromaStation.js` |
 
 หน้าหลัก (`src/pages/Home.jsx`) เป็นตัวโหลดหน้าเหล่านี้ / `src/pages/Login.jsx` ใช้ `auth.js`
 
@@ -108,6 +109,7 @@ git push
   | 5003 | graph | `excelGraph`, `excelConfigs` (Microsoft Graph token อยู่ที่นี่ตัวเดียว) | ภายในเครื่อง |
   | 5004 | mes | `mes` | ภายในเครื่อง |
   | 5005 | work | `tasks`, `pmChecklist`, `notifications` + `jobs/pdCallMeEscalation.js` | ภายในเครื่อง |
+  | 5006 | chroma | `chroma` (Chroma Tester: proxy ไปคอมเทส + รับ log / ผลเทส / OEE) | ภายในเครื่อง |
 
   - service ภายในเครื่อง bind `127.0.0.1` เข้าได้ผ่านหน้าเว็บ 5173 หรือผ่าน 5000 เท่านั้น
   - port 5000 **ส่งต่อ** path ของ service อื่นให้ (`forwardToOtherServices`) โปรแกรมเก่าที่เรียก `:5000/api/...` ตรงจึงยังใช้ได้ / ปลายทางปิด = 503
@@ -179,6 +181,24 @@ git push
     ทุก station ส่ง WO เดียวกัน — server เช็คว่า WO อยู่ใน Line ของ station นั้น (station ต่าง Line กัน = ส่งไม่ผ่าน)
     + Progress bar Output / Target จาก WMS (`GET /api/mes/wo-progress?mo=` โหลดใหม่ทุก 30 วินาที, ต้องตั้ง `WMS_API_USER` / `WMS_API_PASSWORD`)
   - ตาราง `automation_lines.mes_*` ที่เคยสร้างไว้รุ่นก่อน เลิกใช้แล้ว (ลบได้)
+- **Chroma Tester** (`https://10.204.206.1:5173/chroma`, admin / me เท่านั้น — **หน้าแยก ไม่ได้อยู่ในแท็บของ Home ห้ามแก้สิทธิ์หน้า Home เพื่อเรื่องนี้**)
+  สั่งเครื่อง Chroma 19036 ผ่าน **คอมเทสหน้าเครื่อง** (C# Station App, HTTPS port 8443 ใน WiFi local) — เบราว์เซอร์ไม่ต่อคอมเทสตรง ผ่าน service chroma (5006) เท่านั้น
+  - สัญญา API ทั้งสองฝั่งอยู่ที่ `D:\Chroma DCR\CLAUDE.md` (หัวข้อ "Chroma Station App — สเปก") — แก้ฝั่งใดต้องแก้อีกฝั่งให้ตรง
+  - ลงทะเบียนเครื่อง: กรอก IP / port → "ตรวจเครื่อง" อ่าน certificate → ผู้ใช้เทียบ fingerprint กับจอคอมเทส → บันทึก → ได้ API key (แสดงครั้งเดียว) ไปใส่ที่คอมเทส
+    cert เก็บไว้ (`cert_pem`, `cert_sha256`) แล้วทุก request **pin** cert นั้น (`lib/chromaStation.js` — `ca` + เช็ค fingerprint) ห้ามปิดการตรวจ TLS
+    API key เก็บเข้ารหัส AES-256-GCM (key จาก `JWT_SECRET`) — เปลี่ยน `JWT_SECRET` = ต้องสร้าง key ใหม่ทุกเครื่อง
+  - proxy: `/api/chroma/stations/:id/api/<path>` → `https://<ip>:<port>/api/v1/<path>` (path ที่อนุญาตอยู่ใน `PROXY_RULES`) ส่ง `X-Api-Key`, `X-User`, `X-User-Name` (encodeURIComponent)
+    คอมเทสตอบ 401 → ส่งต่อเป็น 502 (ไม่ให้หน้าเว็บคิดว่า session ผู้ใช้หลุด)
+  - ข้อมูลสด: หน้าเว็บเรียก `POST /api/chroma/stations/:id/watch` ทุก 30 วิ → service เปิด SSE `/api/v1/events` ของคอมเทส แล้วส่ง socket `chroma_event`
+    `{ stationId, type, data }` ไปที่ห้อง `user:<employee_id>` ของผู้ที่เปิดดู (ไม่มีคนดูเกิน 60 วิ = ปิด SSE)
+  - คอมเทสส่งขึ้น server: `POST /api/chroma/ingest` (event มี uuid, ซ้ำ = ไม่บันทึกซ้ำแต่ตอบ accepted) และ `/api/chroma/heartbeat` ทุก 30 วิ
+    ใช้ header `X-Station-Id` + `X-Api-Key` (ไม่ใช้ JWT) — คอมเทสเรียกผ่าน `https://10.204.206.1:5173` (vite proxy ตาม services.json)
+  - ตาราง `automation_lines.chroma_stations / chroma_events / chroma_param_changes / chroma_test_runs / chroma_test_steps / chroma_oee_minutes`
+    (สร้างใน `initDatabase()` ของ service data — ต้อง restart data ครั้งแรกให้ตารางถูกสร้าง)
+  - เก็บเฉพาะการเปลี่ยน parameter / memory / โหมด / ค่า PLC + ผลเทส + OEE รายนาที — log TX/RX ละเอียดอยู่ที่คอมเทสเท่านั้น
+  - วัน / กะ ของสรุป / OEE ใช้ 07:40-19:40 / 19:40-07:40 เหมือน MES (`workShiftOf` ใน `routes/chroma.js`)
+  - ทดสอบโดยไม่มีคอมเทสจริง: `node tools/chroma-mock/mock-station.mjs --port 8443 --key <API key> --server https://localhost:5173 --station <id>`
+    (cert ของ mock สร้างเองที่ `tools/chroma-mock/.cert/` — gitignore แล้ว, `--fail 2` = FAIL ที่ step 2, `--auto-every 10` = จำลอง PLC สั่ง Start ในโหมด Auto)
 - **WMS** (ข้อมูล WO): `src/api/lib/wmsClient.js` login ที่ `WMS_AUTH_BASE` (default `http://10.204.212.28:15000/auth/login`)
   ด้วย `WMS_API_USER` / `WMS_API_PASSWORD` ใน `.env` แล้วเรียก `WMS_API_BASE` (default `http://10.204.212.28:5207`) เช่น `/workorder/<WO>/detail`
   - token จำในหน่วยความจำ ใกล้หมด (< 2 นาที) หรือได้ 401 → login ใหม่อัตโนมัติ (`wmsGet`) / ไม่ตั้งบัญชี = ตอบ 503

@@ -11,6 +11,8 @@ import Home from '../pages/Home';
 
 // หน้า MES Update แบบเต็มจอ (kiosk หน้าไลน์) มี login operator ของตัวเอง
 const MesUpdate = lazy(() => import('../components/mes/MesUpdate'));
+// หน้า Chroma Tester (admin, me) — หน้าแยก ไม่ได้อยู่ในแท็บของ Home
+const ChromaPage = lazy(() => import('../components/chroma/ChromaPage'));
 
 export default function AppRoutes() {
   const navigate = useNavigate();
@@ -133,6 +135,15 @@ export default function AppRoutes() {
         element={
           <Suspense fallback={null}>
             <MesUpdate isDarkMode={isDarkMode} />
+          </Suspense>
+        }
+      />
+
+      <Route
+        path="/chroma"
+        element={
+          <Suspense fallback={null}>
+            <ChromaPage isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />
           </Suspense>
         }
       />
