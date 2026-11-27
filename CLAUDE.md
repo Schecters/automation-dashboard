@@ -92,7 +92,7 @@ git push
 | `dashboard/` | OverallContent (ภาพรวม ดึงหลายเรื่อง), ApiDocContent (คู่มือ API) | หลายไฟล์ |
 | `defects/` | DefectCodeContent (อาการงานเสีย), DefectHistoryContent (ประวัติงานเสีย) | `defects.js` |
 | `common/` | NotificationBell, DarkModeToggle | `notifications.js` |
-| `chroma/` | ChromaPage (หน้า `/chroma` แยก ไม่อยู่ในแท็บ Home), ChromaSteps, ChromaTest, ChromaPlcOee, ChromaHistory, WaveChart | `chroma.js` + `lib/chromaStation.js` |
+| `chroma/` | ChromaPage (แท็บ "Chroma Tester" ใน Home + หน้าเต็ม `/chroma`), ChromaSteps, ChromaTest, ChromaPlcOee, ChromaHistory, WaveChart | `chroma.js` + `lib/chromaStation.js` |
 
 หน้าหลัก (`src/pages/Home.jsx`) เป็นตัวโหลดหน้าเหล่านี้ / `src/pages/Login.jsx` ใช้ `auth.js`
 
@@ -181,7 +181,8 @@ git push
     ทุก station ส่ง WO เดียวกัน — server เช็คว่า WO อยู่ใน Line ของ station นั้น (station ต่าง Line กัน = ส่งไม่ผ่าน)
     + Progress bar Output / Target จาก WMS (`GET /api/mes/wo-progress?mo=` โหลดใหม่ทุก 30 วินาที, ต้องตั้ง `WMS_API_USER` / `WMS_API_PASSWORD`)
   - ตาราง `automation_lines.mes_*` ที่เคยสร้างไว้รุ่นก่อน เลิกใช้แล้ว (ลบได้)
-- **Chroma Tester** (`https://10.204.206.1:5173/chroma`, admin / me เท่านั้น — **หน้าแยก ไม่ได้อยู่ในแท็บของ Home ห้ามแก้สิทธิ์หน้า Home เพื่อเรื่องนี้**)
+- **Chroma Tester** — แท็บ `chroma_tester` ใน Home (หมวด Engineering Tasks) + หน้าเต็ม `https://10.204.206.1:5173/chroma` (`ChromaPage embedded`)
+  **เห็น / แก้ได้เฉพาะ admin, me** — role อื่นห้ามเห็น (tab roles + API `requireRoles('admin','me')` ทุก endpoint + หน้า /chroma เช็ค role) · ห้ามแก้ roles ของแท็บอื่น
   สั่งเครื่อง Chroma 19036 ผ่าน **คอมเทสหน้าเครื่อง** (C# Station App, HTTPS port 8443 ใน WiFi local) — เบราว์เซอร์ไม่ต่อคอมเทสตรง ผ่าน service chroma (5006) เท่านั้น
   - สัญญา API ทั้งสองฝั่งอยู่ที่ `D:\Chroma DCR\CLAUDE.md` (หัวข้อ "Chroma Station App — สเปก") — แก้ฝั่งใดต้องแก้อีกฝั่งให้ตรง
   - ลงทะเบียนเครื่อง: กรอก IP / port → "ตรวจเครื่อง" อ่าน certificate → ผู้ใช้เทียบ fingerprint กับจอคอมเทส → บันทึก → ได้ API key (แสดงครั้งเดียว) ไปใส่ที่คอมเทส

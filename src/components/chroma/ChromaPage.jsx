@@ -11,7 +11,7 @@ import ChromaHistory from "./ChromaHistory";
 // 🔌 หน้า /chroma — Chroma Tester (admin, me)
 //  สั่งเครื่อง Chroma 19036 ผ่านคอมเทสหน้าเครื่อง (C# Station App) — ทุกคำสั่งผ่าน service chroma (5006)
 //  ข้อมูลสด: เรียก /watch ทุก 30 วิ → server ส่ง socket "chroma_event" { stationId, type, data } มาที่ห้องของผู้ใช้
-//  ไม่ได้อยู่ในแท็บของหน้า Home (ไม่แตะสิทธิ์หน้า Home) — เปิดที่ https://<server>:5173/chroma
+//  เปิดได้ 2 ทาง: หน้าเต็ม https://<server>:5173/chroma หรือแท็บ "Chroma Tester" ใน Home (embedded = ไม่มี header ของตัวเอง)
 // ==========================================
 const ROLES = ["admin", "me"];
 const TABS = [
@@ -37,7 +37,7 @@ function Modal({ title, children, onClose, dark, danger }) {
   );
 }
 
-export default function ChromaPage({ isDarkMode, setIsDarkMode }) {
+export default function ChromaPage({ isDarkMode, setIsDarkMode, embedded = false }) {
   const navigate = useNavigate();
   const u = ui(isDarkMode);
   const role = String(localStorage.getItem("userRole") || "").toLowerCase();
@@ -284,15 +284,23 @@ export default function ChromaPage({ isDarkMode, setIsDarkMode }) {
   const running = status?.state && status.state !== "Idle";
 
   return (
-    <div className={`min-h-screen ${isDarkMode ? "bg-[#0F172A] text-slate-100" : "bg-gray-50 text-gray-800"}`}>
-      <header className={`sticky top-0 z-40 border-b px-4 py-3 flex flex-wrap items-center gap-3 ${isDarkMode ? "bg-[#0F172A]/95 border-slate-800" : "bg-white/95 border-gray-200"}`}>
-        <button className={u.btn} onClick={() => navigate("/home")}>← Dashboard</button>
-        <h1 className="text-xl font-bold">Chroma Tester</h1>
-        <span className="text-xs text-gray-400">Chroma 19036 ผ่านคอมเทสหน้าเครื่อง</span>
-        <button className={`${u.btn} ml-auto`} onClick={() => setIsDarkMode?.(!isDarkMode)}>{isDarkMode ? "☀️" : "🌙"}</button>
-      </header>
+    <div className={embedded ? (isDarkMode ? "text-slate-100" : "text-gray-800") : `min-h-screen ${isDarkMode ? "bg-[#0F172A] text-slate-100" : "bg-gray-50 text-gray-800"}`}>
+      {embedded ? (
+        <div className="flex flex-wrap items-center gap-3 mb-2">
+          <h2 className="text-2xl font-bold">Chroma Tester</h2>
+          <span className="text-xs text-gray-400">Chroma 19036 ผ่านคอมเทสหน้าเครื่อง</span>
+          <a className={`${u.btn} ml-auto`} href="/chroma" target="_blank" rel="noreferrer">เปิดเต็มจอ ↗</a>
+        </div>
+      ) : (
+        <header className={`sticky top-0 z-40 border-b px-4 py-3 flex flex-wrap items-center gap-3 ${isDarkMode ? "bg-[#0F172A]/95 border-slate-800" : "bg-white/95 border-gray-200"}`}>
+          <button className={u.btn} onClick={() => navigate("/home")}>← Dashboard</button>
+          <h1 className="text-xl font-bold">Chroma Tester</h1>
+          <span className="text-xs text-gray-400">Chroma 19036 ผ่านคอมเทสหน้าเครื่อง</span>
+          <button className={`${u.btn} ml-auto`} onClick={() => setIsDarkMode?.(!isDarkMode)}>{isDarkMode ? "☀️" : "🌙"}</button>
+        </header>
+      )}
 
-      <div className="p-4 grid gap-4 lg:grid-cols-[260px_1fr]">
+      <div className={`${embedded ? "" : "p-4 "}grid gap-4 lg:grid-cols-[260px_1fr]`}>
         <aside className={`rounded-2xl border p-3 h-fit ${u.card}`}>
           <div className="flex items-center justify-between mb-2">
             <div className="text-sm font-bold">เครื่อง (คอมเทส)</div>

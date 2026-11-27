@@ -24,6 +24,7 @@ const PmChecklistBuilder = lazy(() => import("../components/pm/PmChecklistBuilde
 const DefectCodeContent = lazy(() => import("../components/defects/DefectCodeContent"));
 const DefectHistoryContent = lazy(() => import("../components/defects/DefectHistoryContent"));
 const MesOutputContent = lazy(() => import("../components/mes/MesOutputContent"));
+const ChromaPage = lazy(() => import("../components/chroma/ChromaPage"));
 
 // 🟢 Common
 import NotificationBell from "../components/common/NotificationBell";
@@ -182,6 +183,18 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         icon: (
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        ),
+      },
+      {
+        id: "chroma_tester",
+        label: "Chroma Tester",
+        category: "Engineering Tasks",
+        // เครื่องทดสอบ Chroma 19036 ผ่านคอมเทส (สั่งจ่ายไฟได้) — API ตรวจ admin, me อีกชั้น / หน้าเต็มที่ /chroma
+        roles: ["admin", "me"],
+        icon: (
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
         ),
       },
@@ -436,6 +449,8 @@ export default function Home({ isDarkMode, setIsDarkMode }) {
         return <RepairTaskContent isDarkMode={isDarkMode} />;
       case "step_custom":
         return <StepCustom isDarkMode={isDarkMode} />;
+      case "chroma_tester":
+        return <ChromaPage isDarkMode={isDarkMode} embedded />;
       case "operator":
         return (
           <OperatorContent
