@@ -12,6 +12,7 @@
     "start:web": "vite build && vite preview",
     "api:all": "concurrently -n data,realtime,auth,graph,mes,work,chroma -c blue,magenta,green,yellow,cyan,white,red \"node src/api/services/data.js\" \"node src/api/services/realtime.js\" \"node src/api/services/auth.js\" \"node src/api/services/graph.js\" \"node src/api/services/mes.js\" \"node src/api/services/work.js\" \"node src/api/services/chroma.js\"",
     "api:single": "node src/api/server.js",
+    "make:https-cert": "node tools/make-https-cert.cjs",
     "start:launcher": "electron launcher-main.cjs",
     "build:launcher": "electron-builder --win portable --x64",
     "build:launcher:dir": "electron-builder --win dir --x64"

@@ -440,10 +440,14 @@ export default function ChromaPage({ isDarkMode, setIsDarkMode }) {
       {keyShow && (
         <Modal title={`API key ของ ${keyShow.name}`} dark={isDarkMode} onClose={() => setKeyShow(null)}>
           <p className="text-sm mb-2">ใส่ค่านี้ในหน้าตั้งค่าของคอมเทส — <b>แสดงครั้งเดียว</b> ปิดแล้วดูอีกไม่ได้ (สร้างใหม่ได้)</p>
-          <div className={`rounded-xl p-3 font-mono text-sm break-all ${u.soft}`}>
-            <div>Station ID: <b>{keyShow.stationId}</b></div>
+          <div className={`rounded-xl p-3 font-mono text-sm break-all space-y-1 ${u.soft}`}>
+            <div className="text-base">Station ID = <b className="text-2xl">{keyShow.stationId}</b></div>
+            <div className="font-sans text-xs text-amber-600">
+              ช่อง Station ID ที่คอมเทส (F2 → แท็บ ทั่วไป) ต้องใส่ <b>ตัวเลข {keyShow.stationId}</b> — ไม่ใช่ชื่อเครื่อง (ใส่ชื่อ = ส่งข้อมูลไม่ได้)
+            </div>
             <div>API key: <b>{keyShow.apiKey}</b></div>
             <div>Server URL: <b>{window.location.origin}</b></div>
+            <div className="font-sans text-xs text-gray-400">Server cert SHA-256: ดูจากคำสั่ง npm run make:https-cert บน server</div>
           </div>
           <div className="flex justify-end gap-2 mt-4">
             <button className={u.btn} onClick={() => copy(keyShow.apiKey)}>คัดลอก key</button>

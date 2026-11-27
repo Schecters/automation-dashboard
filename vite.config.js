@@ -1,5 +1,8 @@
 /* global process */
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import basicSsl from '@vitejs/plugin-basic-ssl';
@@ -27,10 +30,25 @@ for (const svc of servicesConfig.services) {
   }
 }
 
+// 🔐 HTTPS: ใช้ certificate ของ server เอง (อายุ 10 ปี) ถ้ามีไฟล์ — fingerprint คงที่
+//  คอมเทส Chroma (C# Station App) pin SHA-256 ของ cert นี้ไว้ตอนส่ง log ขึ้น server → cert เปลี่ยน = คอมเทสส่งไม่ได้
+//  basicSsl สร้าง cert ใหม่ทุก 30 วัน จึงใช้เป็นตัวสำรองเท่านั้น (ยังไม่ได้สร้างไฟล์ / เครื่อง dev)
+//  ตำแหน่งไฟล์: HTTPS_KEY_FILE / HTTPS_CERT_FILE ใน .env หรือค่าเริ่มต้น <โฟลเดอร์แม่ของโปรเจกต์>\certs\dashboard.key|crt (นอก repo)
+//  สร้างไฟล์: npm run make:https-cert (ดู tools/make-https-cert.cjs)
+const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(projectRoot, '.env'), quiet: true });
+const certDir = path.resolve(projectRoot, '..', 'certs');
+const keyFile = process.env.HTTPS_KEY_FILE || path.join(certDir, 'dashboard.key');
+const certFile = process.env.HTTPS_CERT_FILE || path.join(certDir, 'dashboard.crt');
+const ownCert = existsSync(keyFile) && existsSync(certFile)
+  ? { key: readFileSync(keyFile), cert: readFileSync(certFile) }
+  : null;
+const httpsOption = ownCert || true;
+
 export default defineConfig({
   plugins: [
     react(),
-    basicSsl(),
+    ...(ownCert ? [] : [basicSsl()]),
     tailwindcss(),
   ],
   build: {
@@ -42,7 +60,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
-    https: true,
+    https: httpsOption,
     watch: {
       ignored: ['**/node_modules/**', '**/.git/**'],
     },
@@ -56,7 +74,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
-    https: true,
+    https: httpsOption,
     proxy: apiProxy,
   },
 });

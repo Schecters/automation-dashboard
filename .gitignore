@@ -45,3 +45,6 @@ tools/mes-bridge/mes-bridge.config.json
 
 # คอมเทส Chroma จำลอง: certificate / key ที่สร้างตอนรัน (ห้ามขึ้น GitHub)
 tools/chroma-mock/.cert/
+# certificate HTTPS ของ server (ถ้าวางไว้ใน repo) — ไฟล์ key เป็นความลับ
+certs/
+*.key

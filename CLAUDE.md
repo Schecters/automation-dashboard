@@ -197,6 +197,12 @@ git push
     (สร้างใน `initDatabase()` ของ service data — ต้อง restart data ครั้งแรกให้ตารางถูกสร้าง)
   - เก็บเฉพาะการเปลี่ยน parameter / memory / โหมด / ค่า PLC + ผลเทส + OEE รายนาที — log TX/RX ละเอียดอยู่ที่คอมเทสเท่านั้น
   - วัน / กะ ของสรุป / OEE ใช้ 07:40-19:40 / 19:40-07:40 เหมือน MES (`workShiftOf` ใน `routes/chroma.js`)
+  - คอมเทสส่ง `X-Station-Id` = **เลข id** ของ `chroma_stations` (ใส่ชื่อ = 401) · หน้าลงทะเบียนแสดง "Station ID = <ตัวเลข>"
+  - **certificate ของหน้าเว็บ 5173 ต้องคงที่** เพราะคอมเทส pin SHA-256 ของ server ไว้ (ช่อง "Server cert SHA-256")
+    `vite.config.js` ใช้ `HTTPS_KEY_FILE` / `HTTPS_CERT_FILE` (.env) หรือ `<โฟลเดอร์แม่ของโปรเจกต์>\certs\dashboard.key|crt`
+    (บน server = `C:\Website\certs\`) — ไม่มีไฟล์ = ถอยไปใช้ basicSsl (cert เปลี่ยนทุก 30 วัน → คอมเทสส่งไม่ได้เมื่อหมดอายุ)
+    สร้างไฟล์: `npm run make:https-cert -- --ip 10.204.206.1` (อายุ 10 ปี, พิมพ์ SHA-256 ให้ใส่ที่คอมเทส, มีอยู่แล้ว = ไม่สร้างทับ เว้นแต่ `--force`)
+    สร้างใหม่ / เปลี่ยน cert = ต้องแก้ SHA-256 ที่คอมเทสทุกเครื่อง + เบราว์เซอร์ทุกเครื่องเตือน cert ใหม่ 1 ครั้ง · ไฟล์ `.key` ห้ามขึ้น GitHub
   - ทดสอบโดยไม่มีคอมเทสจริง: `node tools/chroma-mock/mock-station.mjs --port 8443 --key <API key> --server https://localhost:5173 --station <id>`
     (cert ของ mock สร้างเองที่ `tools/chroma-mock/.cert/` — gitignore แล้ว, `--fail 2` = FAIL ที่ step 2, `--auto-every 10` = จำลอง PLC สั่ง Start ในโหมด Auto)
 - **WMS** (ข้อมูล WO): `src/api/lib/wmsClient.js` login ที่ `WMS_AUTH_BASE` (default `http://10.204.212.28:15000/auth/login`)

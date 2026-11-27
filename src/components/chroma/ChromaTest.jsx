@@ -7,6 +7,7 @@ const RESULT_CLS = {
   PASS: "bg-emerald-500/15 text-emerald-500",
   FAIL: "bg-rose-500/15 text-rose-500",
   ABORT: "bg-violet-500/15 text-violet-500",
+  ABORTED: "bg-violet-500/15 text-violet-500", // outcome ราย step จากคอมเทส: Pass / Fail / Aborted / Skip / Incomplete
   ERROR: "bg-amber-500/15 text-amber-500",
 };
 
